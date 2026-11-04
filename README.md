@@ -100,25 +100,55 @@ node localization_engine.js --brand-title translated
 
 ---
 
-## 🔌 可选高级功能：网络透明代理自动注入 (Windows 免 TUN 方案)
+## 🔌 预集成高级功能：网络透明代理自动注入 (Windows 免 TUN 方案)
 
-如果您处于网络受限环境（例如连通 Google AI / Gemini 接口受阻），且不希望开启系统的全局虚拟网卡/TUN 模式，本项目支持在安装汉化时**自动联动注入 Windows 免 TUN 强制代理工具**。
+> 💡 **本仓库特性**：本 Fork 仓库已**原生预打包**了免 TUN 透明代理所需的核心模块（基于 [yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy) 的 MinHook DLL 劫持方案）。克隆本仓库后即可直接开箱即用，无需手动到外部下载文件！
 
-该方案基于优秀的开源项目 **[yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)**（基于 MinHook 的 DLL 劫持透明代理）。
+如果您处于网络受限环境（例如连通 Google AI / Gemini 接口受阻），且不希望开启系统的全局虚拟网卡/TUN 模式，本仓库支持在安装汉化时**自动联动注入 Windows 免 TUN 强制代理工具**。
 
-### 使用方法：
-1. 前往 **[yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)** 获取编译好的文件：
-   - `version.dll`
-   - `dbghelp.dll`
-   - `config.json`
-2. 在当前汉化项目根目录新建 `proxy_config` 文件夹（该文件夹已加入 `.gitignore` 本地排除，绝不会被 Git 提交污染）。
-3. 将 `version.dll`、`dbghelp.dll` 以及按您本地代理端口（如 `127.0.0.1:7890` / `18080`）配置好的 `config.json` 放入 `proxy_config/` 目录。
-4. 正常双击运行 **`双击安装中文汉化.bat`**：
-   - 汉化引擎将**自动检测** `proxy_config/` 目录。
-   - 一步自动完成 **“界面中文汉化 + 代理模块注入”**，无需再在软件更新后每次手动拷贝 DLL 文件！
-5. **完全可选 & 零侵入**：
-   - 如果您不需要代理或未创建 `proxy_config/` 目录，安装流程保持 100% 官方纯净汉化，对普通用户零干扰。
-   - 运行 **`双击卸载还原官方英文.bat`** 时，同样会自动识别并清理安装目录下的代理文件，完美恢复官方纯净状态。
+### 📦 开箱即用与配置说明：
+1. **开箱即用**：
+   - 项目根目录已内置 `proxy_config/version.dll` 及 `proxy_config/config.json`。
+   - 默认预设代理端口为 **`127.0.0.1:7897`**（SOCKS5 协议，完全兼容 Clash Verge Rev / Mihomo 等主流客户端）。
+2. **如需修改代理端口**：
+   - 如果您使用的是其他端口（如 Clash 的 `7890` 或 V2Ray 的 `10808`），仅需用文本编辑器打开 [`proxy_config/config.json`](proxy_config/config.json)，将 `"port": 7897` 修改为您本机的代理端口即可。
+3. **一键安装**：
+   - **Windows**：双击运行 **`双击安装中文汉化.bat`**。汉化引擎会自动检测 `proxy_config` 目录，一步完成 **“界面汉化 + 代理模块注入”**！后续软件更新后也只需双击该脚本重新应用即可。
+   - **macOS**：双击运行 **`双击安装中文汉化.command`** 即可。macOS 会自动跳过 Windows DLL 注入，保持 100% 原生纯净汉化（Mac 端直接在代理工具中开启“系统代理”或“增强模式”即可无缝生效）。
+4. **无痕卸载**：
+   - 运行 **`双击卸载还原官方英文.bat`** 时，会自动清除汉化并彻底清理安装目录下的代理文件，恢复官方纯净状态。
+
+---
+
+## 🔄 个人 Fork 维护与更新指南（含 Agent 自动化协作）
+
+本仓库作为个人维护的增强分支，保持与官方上游汉化及代理工具的双向可维护性：
+
+### 1. 同步上游汉化项目更新（`qqxpee/antigravity2-cn`）
+当上游发布了新词典或汉化更新时，由于上游没有 `proxy_config/` 目录，直接拉取合并即可无冲突同步：
+```bash
+# 添加并获取上游更新（首次需要添加 upstream）
+git remote add upstream https://github.com/qqxpee/antigravity2-cn.git
+git fetch upstream
+
+# 合并上游汉化到当前分支
+git merge upstream/main
+
+# 推送到个人仓库
+git push origin main
+```
+
+### 2. 更新代理工具模块（`yuaotian/antigravity-proxy`）
+当代理工具发布新版本时：
+1. 前往 [yuaotian/antigravity-proxy/releases](https://github.com/yuaotian/antigravity-proxy/releases) 下载最新的 `ide-win-x64.zip`；
+2. 提取 `version.dll` 覆盖到本项目的 `proxy_config/version.dll`；
+3. 执行 `git add proxy_config/version.dll` 并提交推送即可。
+
+### 3. AI 智能体（Agent）自动化操作说明
+本仓库内置了标准的 **[`AGENTS.md`](AGENTS.md)** 指南。后续您可以随时召唤 AI 助手帮您完成维护，例如：
+* **“帮我同步上游最新的汉化代码”** —— Agent 会自动执行 `git fetch/merge upstream` 并推送到您的仓库；
+* **“检查并更新 antigravity-proxy 到最新版本”** —— Agent 会自动请求 GitHub Release API 下载最新 DLL 并完成更新提交；
+* **“把代理端口改成 7890”** —— Agent 会自动调整 `config.json` 并应用更新。
 
 ---
 
