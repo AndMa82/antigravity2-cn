@@ -12,8 +12,18 @@ for p in "$REAL_HOME"/.nvm/versions/node/*/bin /opt/homebrew/opt/node@*/bin /usr
     [ -d "$p" ] && export PATH="$p:$PATH"
 done
 
-# 检查管理员权限，若不是 root 则自动通过 sudo 提权并保留环境变量
+# 检查应用目录是否需要 root 权限（若当前用户已拥有写入权限则无需输入 sudo 密码）
+NEED_SUDO=false
 if [ "$EUID" -ne 0 ]; then
+    for app_res in "/Applications/Antigravity.app/Contents/Resources" "/Applications/Antigravity IDE.app/Contents/Resources"; do
+        if [ -d "$app_res" ] && [ ! -w "$app_res" ]; then
+            NEED_SUDO=true
+            break
+        fi
+    done
+fi
+
+if [ "$NEED_SUDO" = true ]; then
     echo "======================================================"
     echo " 提示：macOS 系统修改应用程序（/Applications）需要管理员权限"
     echo " 请在下方输入您的电脑开机密码（输入时密码不显示，直接回车）："
@@ -65,15 +75,17 @@ if [ "$HAS_BRAND_ARG" = false ]; then
     EXTRA_ARGS+=(--brand-title "$BRAND_MODE")
 fi
 
-if [ "$HAS_CUSTOM_INSTALL_DIR" = false ] && [ -d "/Applications/Antigravity.app" ]; then
-    EXTRA_ARGS+=(--install-dir "/Applications/Antigravity.app")
-fi
-
 node localization_engine.js "${EXTRA_ARGS[@]}" "$@"
 
 if [ $? -ne 0 ]; then
     echo ""
-    echo "运行失败！请检查上方错误信息。"
+    echo "======================================================"
+    echo " 运行失败！"
+    echo " 若上方提示 EPERM / operation not permitted（macOS 写入受限）："
+    echo " 1. 打开 macOS「系统设置」->「隐私与安全性」->「App 管理」"
+    echo " 2. 将「终端 (Terminal)」或您当前使用的终端工具勾选为【允许】"
+    echo " 3. 重新双击运行本脚本即可！"
+    echo "======================================================"
     read -n 1 -s
     exit 1
 fi
