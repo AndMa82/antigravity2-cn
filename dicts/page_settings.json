@@ -546,5 +546,15 @@
     "Hide breakdowns": "收起细目",
     "Show breakdown": "显示细目",
     "Show breakdowns": "显示细目",
-    "Hide tools": "收起工具"
+    "Hide tools": "收起工具",
+    "Configure global allowed and denied resource permissions. Learn more.": "配置全局允许和拒绝的资源权限。了解更多。",
+    "Skill Editor": "技能编辑器",
+    "Turbo": "极速 (Turbo)",
+    "Always Ask": "总是询问",
+    "Not in Project": "不在项目中",
+    "Show All": "显示全部",
+    "Keyboard shortcuts": "快捷键",
+    "Learn more.": "了解更多。",
+    "Conversations": "会话列表",
+    "Projects": "项目列表"
 }
