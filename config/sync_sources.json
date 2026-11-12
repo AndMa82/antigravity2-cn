@@ -1,0 +1,38 @@
+{
+  "proxy": "auto",
+  "autoRelocalizeAfterSync": true,
+  "sources": [
+    {
+      "id": "qqxpee",
+      "repo": "https://github.com/qqxpee/antigravity2-cn.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 100,
+      "adapter": "qqxpee"
+    },
+    {
+      "id": "yiheng8023",
+      "repo": "https://github.com/yiheng8023/antigravity-chinese.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 80,
+      "adapter": "yiheng"
+    },
+    {
+      "id": "liominsb",
+      "repo": "https://github.com/liominsb/Antigravity-Chinese-Localization.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 70,
+      "adapter": "liominsb"
+    },
+    {
+      "id": "yuexps",
+      "repo": "https://github.com/yuexps/Antigravity-Hans.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 60,
+      "adapter": "yuexps"
+    }
+  ]
+}

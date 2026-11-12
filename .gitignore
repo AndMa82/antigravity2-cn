@@ -1,6 +1,7 @@
 scratch/
 AgentWork/
 _temp_asar/
+.sync_cache/
 node_modules/
 .DS_Store
 
