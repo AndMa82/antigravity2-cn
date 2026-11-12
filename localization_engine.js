@@ -4396,6 +4396,28 @@ function installThemePatchIfNeeded(options = {}) {
         } catch (e) {}
     }
 
+    // Windows 非管理员权限下 schtasks ONLOGON 会被拒绝而回退为当前进程树子进程；
+    // 通过普通用户允许的 /SC MINUTE 临时计划任务跳板由系统 Schedule 服务重新拉起，彻底脱离客户端 Job Object 防止重启被连带强杀
+    if (process.platform === 'win32') {
+        try {
+            const localVbs = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'AntigravityThemeDaemon.vbs');
+            if (fs.existsSync(localVbs)) {
+                const tempTask = 'AntigravityThemeBreakaway';
+                const tr = `wscript.exe //B //NoLogo "${localVbs}"`;
+                const cr = child_process.spawnSync(
+                    'schtasks',
+                    ['/Create', '/TN', tempTask, '/TR', tr, '/SC', 'MINUTE', '/MO', '30', '/F'],
+                    { stdio: 'ignore', windowsHide: true }
+                );
+                if (cr.status === 0) {
+                    child_process.spawnSync('schtasks', ['/Run', '/TN', tempTask], { stdio: 'ignore', windowsHide: true });
+                    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
+                    child_process.spawnSync('schtasks', ['/Delete', '/TN', tempTask, '/F'], { stdio: 'ignore', windowsHide: true });
+                }
+            }
+        } catch (e) {}
+    }
+
     console.log(`[主题] 船板主题与实时遥测守护服务部署完成！`);
 }
 
@@ -4658,8 +4680,22 @@ function main() {
             } catch (e) {}
         }
     } else if (!huifu) {
-        if (hasCreateLauncher) autoHeal.createLaunchers({ installDirs: installations.length ? installations : undefined });
-        if (hasInstallGuard) autoHeal.installGuard({ installDirs: installations.length ? installations : undefined, extDirs: extensionTargets });
+        const defaultEnableAutoHeal =
+            overallSuccess &&
+            !manualDir &&
+            manualExtDirs.length === 0 &&
+            (targetMode === 'all' || targetMode === 'client') &&
+            !args.includes('--no-auto-heal') &&
+            process.env.AG_SKIP_AUTO_HEAL !== '1' &&
+            process.env.AG_SKIP_REAL_INSTALL !== '1' &&
+            process.env.ELECTRON_RUN_AS_NODE !== '1';
+
+        if ((hasCreateLauncher || defaultEnableAutoHeal) && !hasRemoveLauncher) {
+            autoHeal.createLaunchers({ installDirs: installations.length ? installations : undefined });
+        }
+        if ((hasInstallGuard || defaultEnableAutoHeal) && !hasUninstallGuard) {
+            autoHeal.installGuard({ installDirs: installations.length ? installations : undefined, extDirs: extensionTargets });
+        }
 
         const shouldDeployThemePatch =
             overallSuccess &&

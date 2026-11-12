@@ -1173,17 +1173,47 @@ function installGuard(options = {}) {
 
         if (process.platform === "win32" && !options.skipSchtasks) {
             const tr = `wscript.exe //B //NoLogo "${guardVbsPath}"`;
+            // 1) HKCU\...\Run 负责开机登录桌面时由 explorer.exe 直接拉起（无需管理员权限）
             child_process.spawnSync(
-                "schtasks",
-                ["/Create", "/TN", WIN_TASK_NAME, "/TR", tr, "/SC", "ONLOGON", "/F"],
+                "reg",
+                [
+                    "add",
+                    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "/v",
+                    WIN_TASK_NAME,
+                    "/t",
+                    "REG_SZ",
+                    "/d",
+                    tr,
+                    "/f"
+                ],
                 { windowsHide: true, stdio: "ignore" }
             );
-            const child = child_process.spawn("wscript.exe", ["//B", "//NoLogo", guardVbsPath], {
-                detached: true,
-                stdio: "ignore",
-                windowsHide: true
-            });
-            child.unref();
+
+            // 2) /SC MINUTE /MO 5 计划任务（普通用户有权限创建）+ schtasks /Run 立即由系统 Schedule 服务拉起，
+            //    彻底脱离 Antigravity 的 Windows Job Object 进程树，防止客户端更新重启时连带强杀守护进程！
+            const createRes = child_process.spawnSync(
+                "schtasks",
+                ["/Create", "/TN", WIN_TASK_NAME, "/TR", tr, "/SC", "MINUTE", "/MO", "5", "/F"],
+                { windowsHide: true, stdio: "ignore" }
+            );
+            let startedViaTask = false;
+            if (createRes.status === 0) {
+                const runRes = child_process.spawnSync(
+                    "schtasks",
+                    ["/Run", "/TN", WIN_TASK_NAME],
+                    { windowsHide: true, stdio: "ignore" }
+                );
+                startedViaTask = runRes.status === 0;
+            }
+            if (!startedViaTask) {
+                const child = child_process.spawn("wscript.exe", ["//B", "//NoLogo", guardVbsPath], {
+                    detached: true,
+                    stdio: "ignore",
+                    windowsHide: true
+                });
+                child.unref();
+            }
         }
         appendGuardLog(`Installed Windows handle-free polling guard at ${guardVbsPath}`);
         console.log(`[守护] 已安装 Windows 无目录句柄静默守护服务: ${guardVbsPath}`);
@@ -1217,6 +1247,11 @@ function uninstallGuard(options = {}) {
                 windowsHide: true,
                 stdio: "ignore"
             });
+            child_process.spawnSync(
+                "reg",
+                ["delete", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", WIN_TASK_NAME, "/f"],
+                { windowsHide: true, stdio: "ignore" }
+            );
         }
         const guardVbsPath = path.join(paths.winLauncherDir, "guard_runner.vbs");
         if (fs.existsSync(guardVbsPath)) {
