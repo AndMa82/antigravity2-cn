@@ -171,7 +171,13 @@ if (USE_TW) {
         "[代理] 代理模块注入成功: ": "[代理] 代理模組注入成功: ",
         "[代理] 已清理代理注入文件: ": "[代理] 已清理代理注入檔案: ",
         "[代理警告] 注入文件 ": "[代理警告] 注入檔案 ",
-        "[代理警告] 移除代理文件 ": "[代理警告] 移除代理檔案 "
+        "[代理警告] 移除代理文件 ": "[代理警告] 移除代理檔案 ",
+        "[主题] 检测到 theme_patch 目录，正在同步部署船板主题与实时遥测守护服务...": "[主題] 偵測到 theme_patch 目錄，正在同步部署船板主題與即時遙測守護服務...",
+        "[主题] 船板主题与实时遥测守护服务部署完成！": "[主題] 船板主題與即時遙測守護服務部署完成！",
+        "[主题] 已清理旧版 ~/.antigravity-patch 遗留守护进程与目录。": "[主題] 已清理舊版 ~/.antigravity-patch 遺留守護進程與目錄。",
+        "[主题] 正在卸载船板主题与实时遥测守护服务...": "[主題] 正在卸載船板主題與即時遙測守護服務...",
+        "[主题跳过] 当前 Node.js 版本低于 22.0.0，跳过船板主题服务部署: ": "[主題跳過] 目前 Node.js 版本低於 22.0.0，跳過船板主題服務部署: ",
+        "[主题警告] 船板主题服务执行异常: ": "[主題警告] 船板主題服務執行異常: "
     };
     const translateMsg = (args) => {
         return args.map(arg => {
@@ -4272,6 +4278,143 @@ function restoreProxyIfNeeded(installDir) {
 }
 
 // ==========================================
+// 船板主题与实时遥测守护服务管理 (theme_patch/ · CDP 无侵入注入)
+// ==========================================
+function resolveThemeUserHome() {
+    if (process.platform === 'darwin' && process.env.SUDO_USER && process.env.SUDO_USER !== 'root') {
+        const sudoHome = path.join('/Users', process.env.SUDO_USER);
+        if (fs.existsSync(sudoHome)) {
+            return { sudoUser: process.env.SUDO_USER, home: sudoHome };
+        }
+    }
+    return { sudoUser: null, home: os.homedir() };
+}
+
+function cleanupLegacyAntigravityPatch(homeDir) {
+    const legacyDir = path.join(homeDir, '.antigravity-patch');
+    const startupVbs =
+        process.platform === 'win32'
+            ? path.join(process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'AntigravityThemePatch.vbs')
+            : '';
+
+    const hasLegacyDir = fs.existsSync(legacyDir);
+    const hasStartupVbs = Boolean(startupVbs && fs.existsSync(startupVbs));
+    if (!hasLegacyDir && !hasStartupVbs) return false;
+
+    if (process.platform === 'win32') {
+        try {
+            child_process.spawnSync(
+                'powershell.exe',
+                [
+                    '-NoProfile',
+                    '-ExecutionPolicy',
+                    'Bypass',
+                    '-Command',
+                    "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*daemon.mjs*' -and $_.CommandLine -notlike '*theme-patch*' -and $_.CommandLine -notlike '*antigravity-font-daemon*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+                ],
+                { windowsHide: true, stdio: 'ignore', timeout: 5000 }
+            );
+        } catch (e) {}
+        if (hasStartupVbs) {
+            try { fs.unlinkSync(startupVbs); } catch (e) {}
+        }
+    }
+
+    if (hasLegacyDir) {
+        try {
+            fs.rmSync(legacyDir, { recursive: true, force: true });
+        } catch (e) {}
+    }
+
+    console.log(`[主题] 已清理旧版 ~/.antigravity-patch 遗留守护进程与目录。`);
+    return true;
+}
+
+function runThemePatchCli(subArgs, options = {}) {
+    const themePatchDir = path.join(__dirname, 'theme_patch');
+    const installerPath = path.join(themePatchDir, 'install.mjs');
+    if (!fs.existsSync(installerPath)) return { skipped: true, status: 0 };
+
+    const majorVer = parseInt((process.versions.node || '0').split('.')[0], 10);
+    if (majorVer < 22) {
+        console.warn(`[主题跳过] 当前 Node.js 版本低于 22.0.0，跳过船板主题服务部署: v${process.versions.node}`);
+        return { skipped: true, status: 0 };
+    }
+
+    const { sudoUser, home } = resolveThemeUserHome();
+    const stdioMode = options.stdio || 'inherit';
+
+    if (sudoUser) {
+        return child_process.spawnSync(
+            'sudo',
+            ['-u', sudoUser, 'env', `HOME=${home}`, `PATH=${process.env.PATH || ''}`, process.execPath, '--disable-warning=ExperimentalWarning', installerPath, ...subArgs],
+            { cwd: themePatchDir, stdio: stdioMode }
+        );
+    }
+
+    return child_process.spawnSync(
+        process.execPath,
+        ['--disable-warning=ExperimentalWarning', installerPath, ...subArgs],
+        { cwd: themePatchDir, stdio: stdioMode, windowsHide: true }
+    );
+}
+
+function installThemePatchIfNeeded(options = {}) {
+    const themePatchDir = path.join(__dirname, 'theme_patch');
+    if (!fs.existsSync(path.join(themePatchDir, 'install.mjs'))) return;
+
+    const { home } = resolveThemeUserHome();
+    console.log(`\n[主题] 检测到 theme_patch 目录，正在同步部署船板主题与实时遥测守护服务...`);
+    cleanupLegacyAntigravityPatch(home);
+
+    const res = runThemePatchCli(['install']);
+    if (res.skipped) return;
+    if (res.status !== 0) {
+        console.warn(`[主题警告] 船板主题服务执行异常: exit=${res.status}`);
+        return;
+    }
+
+    // 默认关闭船板自身的 i18n 模块，交由 localization_engine.js 统一接管（确保简/繁与免重启切换零冲突）
+    if (!options.keepThemeI18n) {
+        try {
+            const deployedUserCfgPath = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user', 'config.json');
+            if (fs.existsSync(deployedUserCfgPath)) {
+                const cfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
+                if (!cfg.modules || typeof cfg.modules !== 'object') cfg.modules = {};
+                if (cfg.modules.i18n !== false) {
+                    cfg.modules.i18n = false;
+                    fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+                    const deployedDaemon = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'core', 'daemon.mjs');
+                    if (fs.existsSync(deployedDaemon)) {
+                        child_process.spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', deployedDaemon, '--once'], {
+                            stdio: 'ignore',
+                            windowsHide: true
+                        });
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+
+    console.log(`[主题] 船板主题与实时遥测守护服务部署完成！`);
+}
+
+function uninstallThemePatchIfNeeded() {
+    const { home } = resolveThemeUserHome();
+    cleanupLegacyAntigravityPatch(home);
+
+    const deployedDir = path.join(home, '.gemini', 'antigravity', 'theme-patch');
+    const themePatchDir = path.join(__dirname, 'theme_patch');
+    if (!fs.existsSync(deployedDir) && !fs.existsSync(path.join(themePatchDir, 'install.mjs'))) return;
+
+    console.log(`\n[主题] 正在卸载船板主题与实时遥测守护服务...`);
+    const res = runThemePatchCli(['uninstall']);
+    if (!res.skipped && res.status !== 0) {
+        console.warn(`[主题警告] 船板主题服务执行异常: exit=${res.status}`);
+    }
+}
+
+// ==========================================
 // 入口
 // ==========================================
 function main() {
@@ -4322,6 +4465,30 @@ function main() {
         });
         if (res.status !== 0) process.exit(res.status || 1);
         return;
+    }
+
+    const themeSubcmdMap = {
+        '--theme-doctor': 'doctor',
+        '--theme-verify': 'verify',
+        '--theme-rollback': 'rollback',
+        '--theme-uninstall': 'uninstall',
+        '--theme-install': 'install'
+    };
+    for (const [flag, subcmd] of Object.entries(themeSubcmdMap)) {
+        if (args.includes(flag)) {
+            if (subcmd === 'install') {
+                installThemePatchIfNeeded({ keepThemeI18n: args.includes('--theme-i18n') });
+                return;
+            }
+            if (subcmd === 'uninstall') {
+                uninstallThemePatchIfNeeded();
+                return;
+            }
+            const extra = args.filter(a => a !== flag);
+            const res = runThemePatchCli([subcmd, ...extra]);
+            if (res.status !== 0) process.exit(res.status || 1);
+            return;
+        }
     }
 
     const hasCreateLauncher = args.includes('--create-launcher');
@@ -4479,15 +4646,38 @@ function main() {
         }
     }
 
-    // 卸载还原时若未限定单目录，同步清理自愈启动器与后台守护服务
+    // 卸载还原时若未限定单目录，同步清理自愈启动器、后台守护服务与船板主题服务
     if (huifu && !manualDir && manualExtDirs.length === 0 && targetMode === 'all') {
         try {
             autoHeal.removeLaunchers();
             autoHeal.uninstallGuard();
         } catch (e) {}
+        if (!args.includes('--keep-theme-patch') && process.env.AG_SKIP_THEME_PATCH !== '1' && process.env.AG_SKIP_REAL_INSTALL !== '1') {
+            try {
+                uninstallThemePatchIfNeeded();
+            } catch (e) {}
+        }
     } else if (!huifu) {
         if (hasCreateLauncher) autoHeal.createLaunchers({ installDirs: installations.length ? installations : undefined });
         if (hasInstallGuard) autoHeal.installGuard({ installDirs: installations.length ? installations : undefined, extDirs: extensionTargets });
+
+        const shouldDeployThemePatch =
+            overallSuccess &&
+            !manualDir &&
+            manualExtDirs.length === 0 &&
+            (targetMode === 'all' || targetMode === 'client') &&
+            !args.includes('--no-theme-patch') &&
+            process.env.AG_SKIP_THEME_PATCH !== '1' &&
+            process.env.AG_SKIP_REAL_INSTALL !== '1' &&
+            process.env.ELECTRON_RUN_AS_NODE !== '1';
+
+        if (shouldDeployThemePatch) {
+            try {
+                installThemePatchIfNeeded({ keepThemeI18n: args.includes('--theme-i18n') });
+            } catch (e) {
+                console.warn(`[主题警告] 船板主题服务执行异常: ${e.message}`);
+            }
+        }
     }
 
     // 5. 校验通过且原来客户端在运行，则自动重新启动客户端

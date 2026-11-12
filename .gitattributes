@@ -1,2 +1,4 @@
 *.bat -text
 *.command text eol=lf
+theme_patch/** text=auto eol=lf
+

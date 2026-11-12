@@ -11,6 +11,15 @@
       "adapter": "qqxpee"
     },
     {
+      "id": "chuanban",
+      "repo": "https://github.com/Anarcadia/chuanban-antigravity-theme-patch.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 90,
+      "adapter": "chuanban",
+      "syncThemeCore": true
+    },
+    {
       "id": "yiheng8023",
       "repo": "https://github.com/yiheng8023/antigravity-chinese.git",
       "branch": "main",

@@ -2,7 +2,7 @@
 title Antigravity Restore Tool
 
 echo.
-echo [1/2] Restoring Official Files (Client, IDE, VS Code Extensions ^& Auto-Heal)...
+echo [1/2] Restoring Official Files (Client, IDE, VS Code Extensions, Theme Patch ^& Auto-Heal)...
 node "%~dp0localization_engine.js" --huifu %*
 
 if %errorlevel% neq 0 (
@@ -15,7 +15,7 @@ if %errorlevel% neq 0 (
 echo.
 echo [2/2] Restoration Complete!
 echo.
-echo [Note] Antigravity, IDE/VS Code extensions, and auto-heal guards have been restored.
+echo [Note] Antigravity, IDE/VS Code extensions, theme patch, and auto-heal guards have been restored.
 echo.
 echo The window will close automatically in 5 seconds...
 timeout /t 5

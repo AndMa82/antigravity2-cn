@@ -23,6 +23,7 @@ const DEFAULT_CONFIG_PATH = path.join(ROOT_DIR, "config", "sync_sources.json");
 const DICTS_SC_DIR = path.join(ROOT_DIR, "dicts");
 const DICTS_TW_DIR = path.join(ROOT_DIR, "dicts_tw");
 const SYNC_CACHE_DIR = path.join(ROOT_DIR, ".sync_cache");
+const THEME_PATCH_DIR = path.join(ROOT_DIR, "theme_patch");
 
 const METADATA_JSON_NAMES = new Set([
     "package.json",
@@ -578,9 +579,71 @@ function adapterYuexps(repoDir) {
     return results;
 }
 
+function adapterChuanban(repoDir) {
+    const results = [];
+    const i18nPath = path.join(repoDir, "core", "i18n.json");
+    if (!fs.existsSync(i18nPath)) return results;
+    try {
+        const raw = JSON.parse(fs.readFileSync(i18nPath, "utf8"));
+        const mapObj = raw && typeof raw.exact === "object" && raw.exact !== null ? raw.exact : raw;
+        if (mapObj && typeof mapObj === "object") {
+            for (const [k, v] of Object.entries(mapObj)) {
+                if (typeof v === "string") {
+                    results.push({ key: k, sc: v, tc: null, targetFile: "common.json" });
+                }
+            }
+        }
+    } catch (_) {}
+    return results;
+}
+
+function syncChuanbanThemeCore(repoDir, targetPatchDir = THEME_PATCH_DIR) {
+    const srcCore = path.join(repoDir, "core");
+    if (!fs.existsSync(srcCore)) return { updated: false, changedFiles: [], version: null };
+
+    const dstCore = path.join(targetPatchDir, "core");
+    fs.mkdirSync(dstCore, { recursive: true });
+
+    const changedFiles = [];
+    for (const item of fs.readdirSync(srcCore)) {
+        const s = path.join(srcCore, item);
+        const d = path.join(dstCore, item);
+        if (!fs.statSync(s).isFile()) continue;
+        const sBuf = fs.readFileSync(s);
+        const dBuf = fs.existsSync(d) ? fs.readFileSync(d) : null;
+        if (!dBuf || !sBuf.equals(dBuf)) {
+            fs.writeFileSync(d, sBuf);
+            changedFiles.push(`core/${item}`);
+        }
+    }
+
+    for (const topFile of ["install.mjs", "SKILL.md", "README.md"]) {
+        const s = path.join(repoDir, topFile);
+        const d = path.join(targetPatchDir, topFile);
+        if (!fs.existsSync(s) || !fs.statSync(s).isFile()) continue;
+        const sBuf = fs.readFileSync(s);
+        const dBuf = fs.existsSync(d) ? fs.readFileSync(d) : null;
+        if (!dBuf || !sBuf.equals(dBuf)) {
+            fs.writeFileSync(d, sBuf);
+            changedFiles.push(topFile);
+        }
+    }
+
+    let version = null;
+    try {
+        const manifestPath = path.join(dstCore, "manifest.json");
+        if (fs.existsSync(manifestPath)) {
+            version = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version || null;
+        }
+    } catch (_) {}
+
+    return { updated: changedFiles.length > 0, changedFiles, version };
+}
+
 function extractCandidatesByAdapter(src, repoDir, cacheDir) {
     const adapter = String(src.adapter || src.id || "").toLowerCase();
     if (adapter === "qqxpee") return adapterQqxpee(repoDir, cacheDir);
+    if (adapter === "chuanban") return adapterChuanban(repoDir);
     if (adapter === "yiheng" || adapter === "yiheng8023") return adapterYiheng(repoDir);
     if (adapter === "liominsb") return adapterLiominsb(repoDir);
     if (adapter === "yuexps") return adapterYuexps(repoDir);
@@ -746,6 +809,7 @@ async function runSync(rawArgv = process.argv.slice(2)) {
     const nextShas = {};
     let addedCount = 0;
     let updatedCount = 0;
+    let themeCoreUpdated = false;
     let processedAnySource = false;
 
     for (const src of enabledSources) {
@@ -766,6 +830,18 @@ async function runSync(rawArgv = process.argv.slice(2)) {
 
         processedAnySource = true;
         console.log(`[同步] 正在解析源 ${src.id} (${fetchInfo.sha.slice(0, 8)}, 拉取耗时 ${dt}ms)...`);
+
+        if (src.syncThemeCore && !opts.dryRun) {
+            const themeSync = syncChuanbanThemeCore(fetchInfo.repoDir, THEME_PATCH_DIR);
+            if (themeSync.updated) {
+                themeCoreUpdated = true;
+                console.log(
+                    `[同步] 已同步更新 theme_patch 内核 (${themeSync.version || "latest"}): ${themeSync.changedFiles.join(", ")}`
+                );
+            } else {
+                console.log(`[同步] theme_patch 内核已是最新 (${themeSync.version || "latest"})。`);
+            }
+        }
         const rawCandidates = extractCandidatesByAdapter(src, fetchInfo.repoDir, cacheDir);
         let srcAdded = 0;
         let srcUpdated = 0;
@@ -894,6 +970,27 @@ async function runSync(rawArgv = process.argv.slice(2)) {
             }
         } catch (err) {
             console.warn(`[同步警告] 联动重汉化触发异常: ${err.message}`);
+        }
+    }
+
+    if (
+        themeCoreUpdated &&
+        config.autoRelocalizeAfterSync &&
+        !opts.noRelocalize &&
+        process.env.AG_SKIP_REAL_INSTALL !== "1"
+    ) {
+        try {
+            const deployedManifest = path.join(os.homedir(), ".gemini", "antigravity", "theme-patch", "core", "manifest.json");
+            const installerPath = path.join(THEME_PATCH_DIR, "install.mjs");
+            if (fs.existsSync(deployedManifest) && fs.existsSync(installerPath)) {
+                console.log("[同步] 检测到本机已部署船板主题服务，正在联动热升级 theme-patch 内核...");
+                child_process.spawnSync(process.execPath, [installerPath, "install"], {
+                    cwd: THEME_PATCH_DIR,
+                    stdio: "inherit"
+                });
+            }
+        } catch (err) {
+            console.warn(`[同步警告] 船板主题内核热升级异常: ${err.message}`);
         }
     }
 

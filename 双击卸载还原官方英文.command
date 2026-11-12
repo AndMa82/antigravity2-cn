@@ -54,7 +54,7 @@ done
 
 EXTRA_ARGS=(--huifu)
 
-echo "====== 正在还原 macOS 版 Antigravity 官方英文（含 IDE / VS Code 扩展及自愈守护清理）======"
+echo "====== 正在还原 macOS 版 Antigravity 官方英文（含 IDE / VS Code 扩展、船板主题及自愈守护清理）======"
 node localization_engine.js "${EXTRA_ARGS[@]}" "$@"
 
 if [ $? -ne 0 ]; then
