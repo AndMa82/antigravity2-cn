@@ -1,0 +1,2166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Antigravity Token & API 价值实时监控</title>
+  <style>
+    :root {
+      --bg-0: #070b14;
+      --bg-1: #0b1120;
+      --bg-2: #111827;
+      --bg-3: #1a2436;
+      --bg-hover: #1e293b;
+      --border: rgba(148, 163, 184, 0.14);
+      --border-strong: rgba(148, 163, 184, 0.28);
+      --text-0: #f8fafc;
+      --text-1: #cbd5e1;
+      --text-2: #94a3b8;
+      --text-3: #64748b;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.14);
+      --emerald: #10b981;
+      --emerald-soft: rgba(16, 185, 129, 0.14);
+      --amber: #f59e0b;
+      --amber-soft: rgba(245, 158, 11, 0.14);
+      --violet: #a78bfa;
+      --violet-soft: rgba(167, 139, 250, 0.14);
+      --rose: #fb7185;
+      --rose-soft: rgba(251, 113, 133, 0.14);
+      --cyan: #22d3ee;
+      --shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+      --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      background: var(--bg-0);
+      color: var(--text-0);
+      font-family: var(--sans);
+      font-size: 13px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+    }
+
+    body {
+      background-image:
+        radial-gradient(1100px 420px at 12% -6%, rgba(56, 189, 248, 0.08), transparent 60%),
+        radial-gradient(900px 380px at 88% -8%, rgba(167, 139, 250, 0.08), transparent 60%);
+    }
+
+    .app-shell {
+      max-width: 1520px;
+      margin: 0 auto;
+      padding: 16px 20px 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* Header & Controls */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(11, 17, 32, 0.88);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px 16px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .topbar-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text-0);
+    }
+
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #0ea5e9, #8b5cf6);
+      display: grid;
+      place-items: center;
+      font-size: 14px;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.35);
+    }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      background: var(--emerald-soft);
+      color: var(--emerald);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .live-pill.paused {
+      background: var(--amber-soft);
+      color: var(--amber);
+      border-color: rgba(245, 158, 11, 0.3);
+    }
+
+    .live-pill.offline {
+      background: var(--rose-soft);
+      color: var(--rose);
+      border-color: rgba(251, 113, 133, 0.3);
+    }
+
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      position: relative;
+    }
+
+    .live-pill.live .pulse-dot::after {
+      content: "";
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 1.5px solid currentColor;
+      animation: pulseRing 1.7s cubic-bezier(0.2, 0.7, 0.3, 1) infinite;
+    }
+
+    @keyframes pulseRing {
+      0% { transform: scale(0.75); opacity: 0.9; }
+      100% { transform: scale(2.1); opacity: 0; }
+    }
+
+    .telemetry-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+    }
+
+    .meta-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 7px;
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid var(--border);
+    }
+
+    .meta-chip b {
+      color: var(--text-0);
+      font-weight: 600;
+    }
+
+    .meta-chip.hot b {
+      color: var(--emerald);
+    }
+
+    .meta-chip.burn b {
+      color: var(--amber);
+    }
+
+    .preset-strip {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+
+    .btn-pill {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.7);
+      color: var(--text-1);
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.14s ease;
+      font-family: var(--sans);
+      white-space: nowrap;
+    }
+
+    .btn-pill:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-strong);
+      color: var(--text-0);
+    }
+
+    .btn-pill.active {
+      background: var(--accent-soft);
+      border-color: rgba(56, 189, 248, 0.55);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .controls-right {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+    }
+
+    .ctrl-select, .ctrl-input {
+      appearance: none;
+      background: rgba(15, 23, 42, 0.85);
+      color: var(--text-0);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-family: var(--sans);
+      outline: none;
+    }
+
+    .ctrl-select:focus, .ctrl-input:focus {
+      border-color: var(--accent);
+    }
+
+    .ctrl-input.fx {
+      width: 56px;
+      font-family: var(--mono);
+      text-align: center;
+      -moz-appearance: textfield;
+    }
+
+    .ctrl-input.fx::-webkit-inner-spin-button,
+    .ctrl-input.fx::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+
+    .seg-group {
+      display: inline-flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(15, 23, 42, 0.85);
+    }
+
+    .seg-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--text-2);
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: var(--mono);
+    }
+
+    .seg-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .btn-action {
+      appearance: none;
+      border: 1px solid var(--border-strong);
+      background: rgba(30, 41, 59, 0.8);
+      color: var(--text-0);
+      padding: 5px 11px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.14s ease;
+    }
+
+    .btn-action:hover {
+      background: #273449;
+      border-color: var(--accent);
+    }
+
+    .btn-action.primary {
+      background: linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(139, 92, 246, 0.22));
+      border-color: rgba(56, 189, 248, 0.48);
+      color: #e0f2fe;
+    }
+
+    .custom-range-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding-top: 6px;
+      border-top: 1px dashed var(--border);
+      font-size: 12px;
+      color: var(--text-2);
+    }
+
+    .custom-range-bar.open {
+      display: flex;
+    }
+
+    /* Range info banner */
+    .range-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 8px 14px;
+      background: rgba(17, 24, 39, 0.72);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 12px;
+      color: var(--text-2);
+    }
+
+    .range-banner strong {
+      color: var(--text-0);
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* KPI Grid */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 15px 16px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .kpi-card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--card-accent, var(--accent));
+      opacity: 0.78;
+    }
+
+    .kpi-card.flash-update {
+      animation: cardFlash 0.9s ease-out;
+    }
+
+    @keyframes cardFlash {
+      0% { box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.75), 0 0 24px rgba(56, 189, 248, 0.28); }
+      100% { box-shadow: 0 6px 20px rgba(0, 0, 0, 0.24); }
+    }
+
+    .kpi-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-2);
+      margin-bottom: 8px;
+    }
+
+    .kpi-tag {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.1);
+      color: var(--text-1);
+      text-transform: none;
+      letter-spacing: 0;
+    }
+
+    .kpi-value {
+      font-family: var(--mono);
+      font-size: 27px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text-0);
+      line-height: 1.15;
+    }
+
+    .kpi-sub {
+      margin-top: 7px;
+      font-size: 11.5px;
+      color: var(--text-2);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+    }
+
+    .kpi-sub span b {
+      color: var(--text-1);
+      font-family: var(--mono);
+      font-weight: 600;
+    }
+
+    .progress-track {
+      margin-top: 8px;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.14);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #10b981, #22d3ee);
+      transition: width 0.35s ease;
+    }
+
+    /* Two column middle section */
+    .mid-grid {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 12px;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .card-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-0);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-subtitle {
+      font-size: 11.5px;
+      color: var(--text-2);
+      font-weight: 400;
+    }
+
+    .donut-layout {
+      display: grid;
+      grid-template-columns: 205px 1fr;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .donut-wrap {
+      position: relative;
+      width: 205px;
+      height: 205px;
+      margin: 0 auto;
+    }
+
+    .donut-center {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      text-align: center;
+      padding: 0 24px;
+    }
+
+    .donut-center-label {
+      font-size: 11px;
+      color: var(--text-2);
+    }
+
+    .donut-center-val {
+      font-family: var(--mono);
+      font-size: 19px;
+      font-weight: 700;
+      color: var(--text-0);
+      margin-top: 2px;
+    }
+
+    .donut-center-sub {
+      font-size: 10.5px;
+      color: var(--text-3);
+      margin-top: 2px;
+    }
+
+    .legend-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 215px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .legend-item {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+
+    .legend-item:hover, .legend-item.active {
+      background: rgba(30, 41, 59, 0.72);
+      border-color: var(--border);
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .legend-name {
+      font-size: 12px;
+      color: var(--text-1);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .legend-val {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--text-0);
+      font-weight: 600;
+    }
+
+    .legend-pct {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-2);
+      width: 46px;
+      text-align: right;
+    }
+
+    /* Cost breakdown stacked bar + ladder */
+    .stack-bar {
+      height: 20px;
+      border-radius: 9px;
+      overflow: hidden;
+      display: flex;
+      background: rgba(148, 163, 184, 0.12);
+      border: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .stack-seg {
+      height: 100%;
+      transition: width 0.35s ease;
+      min-width: 0;
+    }
+
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .bd-item {
+      padding: 8px 10px;
+      border-radius: 9px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .bd-left {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11.5px;
+      color: var(--text-2);
+    }
+
+    .bd-right {
+      text-align: right;
+      font-family: var(--mono);
+    }
+
+    .bd-right .val {
+      font-size: 12.5px;
+      font-weight: 700;
+      color: var(--text-0);
+    }
+
+    .bd-right .pct {
+      font-size: 10.5px;
+      color: var(--text-3);
+    }
+
+    .ladder-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding-top: 10px;
+      border-top: 1px dashed var(--border);
+    }
+
+    .ladder-row {
+      display: grid;
+      grid-template-columns: 128px 1fr 88px;
+      align-items: center;
+      gap: 10px;
+      font-size: 11.5px;
+    }
+
+    .ladder-label {
+      color: var(--text-2);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .ladder-label.selected {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .ladder-track {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.1);
+      overflow: hidden;
+    }
+
+    .ladder-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.35s ease;
+    }
+
+    .ladder-val {
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--text-0);
+      text-align: right;
+    }
+
+    /* Tables */
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(7, 11, 20, 0.45);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    th {
+      background: rgba(15, 23, 42, 0.92);
+      color: var(--text-2);
+      font-weight: 600;
+      font-size: 11px;
+      text-align: right;
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    th:first-child {
+      text-align: left;
+    }
+
+    th.sortable {
+      cursor: pointer;
+    }
+
+    th.sortable:hover {
+      color: var(--text-0);
+    }
+
+    th.sort-active {
+      color: var(--accent);
+    }
+
+    td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+      text-align: right;
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+      color: var(--text-1);
+      white-space: nowrap;
+    }
+
+    td:first-child {
+      text-align: left;
+      font-family: var(--sans);
+      color: var(--text-0);
+    }
+
+    tbody tr:hover {
+      background: rgba(30, 41, 59, 0.55);
+    }
+
+    tfoot td {
+      background: rgba(15, 23, 42, 0.72);
+      font-weight: 700;
+      color: var(--text-0);
+      border-top: 1px solid var(--border-strong);
+      border-bottom: none;
+    }
+
+    .model-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+
+    .sub-num {
+      display: block;
+      font-size: 10px;
+      color: var(--text-3);
+      font-weight: 400;
+    }
+
+    .cost-hi {
+      color: var(--emerald);
+      font-weight: 700;
+    }
+
+    .cost-std {
+      color: var(--amber);
+    }
+
+    /* Trend SVG Chart */
+    .trend-wrap {
+      position: relative;
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    .trend-svg {
+      width: 100%;
+      height: 245px;
+      display: block;
+    }
+
+    .trend-tooltip {
+      position: fixed;
+      z-index: 90;
+      pointer-events: none;
+      display: none;
+      min-width: 220px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(11, 17, 32, 0.96);
+      border: 1px solid var(--border-strong);
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55);
+      font-size: 11.5px;
+      color: var(--text-1);
+    }
+
+    .tt-title {
+      font-weight: 700;
+      color: var(--text-0);
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tt-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin: 2px 0;
+    }
+
+    .tt-row b {
+      font-family: var(--mono);
+      color: var(--text-0);
+    }
+
+    /* Tabs & Live Feed */
+    .tab-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tab-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.7);
+      color: var(--text-2);
+      padding: 6px 12px;
+      border-radius: 9px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tab-btn.active {
+      background: var(--accent-soft);
+      border-color: rgba(56, 189, 248, 0.5);
+      color: var(--accent);
+    }
+
+    .tab-badge {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.16);
+      color: var(--text-1);
+    }
+
+    .window-title-cell {
+      max-width: 340px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 600;
+    }
+
+    .model-tags {
+      display: inline-flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      max-width: 260px;
+    }
+
+    .m-tag {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 5px;
+      background: rgba(148, 163, 184, 0.12);
+      color: var(--text-1);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+
+    .flash-new {
+      animation: newCallRow 2.2s ease-out;
+    }
+
+    @keyframes newCallRow {
+      0% { background: rgba(16, 185, 129, 0.34); }
+      100% { background: transparent; }
+    }
+
+    .empty-state {
+      padding: 28px 16px;
+      text-align: center;
+      color: var(--text-3);
+      font-size: 12.5px;
+    }
+
+    .footer-note {
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-3);
+      padding: 4px 2px;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 99;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      color: var(--text-0);
+      padding: 9px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: all 0.2s ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1120px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .mid-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 700px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .donut-layout { grid-template-columns: 1fr; }
+      .breakdown-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 600px) {
+      .app-shell { padding: 10px 10px 32px; gap: 10px; }
+      .topbar { position: static; padding: 10px 12px; gap: 8px; }
+      .brand-title { font-size: 14px; }
+      .preset-strip { overflow-x: auto; flex-wrap: nowrap; max-width: 100%; padding-bottom: 2px; }
+      .controls-right { gap: 5px; }
+      .ctrl-select, .ctrl-input, .btn-action, .seg-btn { font-size: 11px; padding: 4px 7px; }
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .kpi-val { font-size: 20px; }
+      .card { padding: 12px; border-radius: 12px; }
+      .ladder-row { grid-template-columns: 96px 1fr 72px; gap: 6px; }
+      .window-title-cell { max-width: 160px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Sticky Control Bar -->
+    <header class="topbar">
+      <div class="topbar-row">
+        <div class="brand-group">
+          <div class="brand-title">
+            <span class="brand-logo">⚡</span>
+            <span>Antigravity Token &amp; API 价值实时监控</span>
+          </div>
+          <span id="livePill" class="live-pill live">
+            <span class="pulse-dot"></span>
+            <span id="liveStatusText">LIVE</span>
+          </span>
+          <div class="telemetry-meta">
+            <span class="meta-chip hot">5m活跃窗口 <b id="metaActive5m">-</b></span>
+            <span class="meta-chip burn">实时速率 <b id="metaBurnTok">-</b> · <b id="metaBurnMoney">-</b></span>
+            <span class="meta-chip">扫描 <b id="metaScan">-</b></span>
+            <span class="meta-chip">更新于 <b id="metaServerTime">-</b></span>
+          </div>
+        </div>
+        <div class="controls-right">
+          <select id="pricingMode" class="ctrl-select" title="API 计费口径">
+            <option value="promo">促销+缓存 (实际优惠)</option>
+            <option value="std">官方标准+缓存</option>
+            <option value="nc_promo">促销无缓存等效</option>
+            <option value="nc_std">官方无缓存等效</option>
+          </select>
+          <div class="seg-group" title="货币单位">
+            <button type="button" class="seg-btn active" data-curr="USD">$ USD</button>
+            <button type="button" class="seg-btn" data-curr="CNY">¥ CNY</button>
+          </div>
+          <input id="fxRate" class="ctrl-input fx" type="number" step="0.01" min="1" max="20" value="7.25" title="USD→CNY 汇率" />
+          <select id="tzSelect" class="ctrl-select" title="统计时区">
+            <option value="local">本机时区</option>
+            <option value="8">UTC+8 北京</option>
+            <option value="0">UTC+0 伦敦</option>
+            <option value="-8">UTC-8 美西</option>
+          </select>
+          <select id="refreshInterval" class="ctrl-select" title="自动刷新频率">
+            <option value="2000">2s 刷新</option>
+            <option value="5000" selected>5s 刷新</option>
+            <option value="15000">15s 刷新</option>
+            <option value="0">暂停轮询</option>
+          </select>
+          <button type="button" id="btnRefreshNow" class="btn-action" title="立即刷新">↻ 刷新</button>
+          <button type="button" id="btnExportCsv" class="btn-action">⬇ CSV</button>
+          <button type="button" id="btnSnapshot" class="btn-action primary">📸 桌面快照</button>
+        </div>
+      </div>
+
+      <div class="topbar-row">
+        <div class="preset-strip" id="presetStrip">
+          <button type="button" class="btn-pill active" data-preset="last_7d">近 7 天</button>
+          <button type="button" class="btn-pill" data-preset="since_monday">本周一</button>
+          <button type="button" class="btn-pill" data-preset="today">今日</button>
+          <button type="button" class="btn-pill" data-preset="last_24h">近 24 小时</button>
+          <button type="button" class="btn-pill" data-preset="last_5h">近 5 小时</button>
+          <button type="button" class="btn-pill" data-preset="last_1h">近 1 小时</button>
+          <button type="button" class="btn-pill" data-preset="all_time">全部历史</button>
+          <button type="button" class="btn-pill" data-preset="custom">自定义区间</button>
+        </div>
+      </div>
+
+      <div class="custom-range-bar" id="customRangeBar">
+        <span>开始时间:</span>
+        <input id="customStart" class="ctrl-input" type="datetime-local" />
+        <span>结束时间:</span>
+        <input id="customEnd" class="ctrl-input" type="datetime-local" />
+        <button type="button" id="btnApplyCustom" class="btn-action primary">应用区间</button>
+      </div>
+    </header>
+
+    <!-- Active Time Window Summary Strip -->
+    <div class="range-banner">
+      <div>
+        当前统计窗口: <strong id="rangeLabel">-</strong>
+        <span class="mono" style="margin-left:8px;color:var(--text-3);" id="rangeBounds">-</span>
+      </div>
+      <div class="mono" id="rangeCounts">-</div>
+    </div>
+
+    <!-- 4 KPI Cards -->
+    <section class="kpi-grid">
+      <div class="card kpi-card" id="kpiCard1" style="--card-accent:#38bdf8;">
+        <div class="kpi-head">
+          <span>总 Token 吞吐量</span>
+          <span class="kpi-tag" id="kpiCallsTag">0 次调用</span>
+        </div>
+        <div class="kpi-value" id="kpiTotalTokens">-</div>
+        <div class="kpi-sub">
+          <span>未缓存 <b id="kpiInTok">-</b></span>
+          <span>缓存读 <b id="kpiCacheTok">-</b></span>
+          <span>输出 <b id="kpiOutTok">-</b></span>
+          <span>生图 <b id="kpiImgs">-</b></span>
+        </div>
+      </div>
+
+      <div class="card kpi-card" id="kpiCard2" style="--card-accent:#10b981;">
+        <div class="kpi-head">
+          <span id="kpiSelectedTitle">促销+缓存总价值</span>
+          <span class="kpi-tag" id="kpiSelectedBadge">当前口径</span>
+        </div>
+        <div class="kpi-value" id="kpiSelectedMoney" style="color:var(--emerald);">-</div>
+        <div class="kpi-sub">
+          <span>LLM <b id="kpiSelectedLlm">-</b></span>
+          <span>图像生成 <b id="kpiImgCost">-</b></span>
+        </div>
+      </div>
+
+      <div class="card kpi-card" id="kpiCard3" style="--card-accent:#f59e0b;">
+        <div class="kpi-head">
+          <span id="kpiRefTitle">官方标准原价 (含缓存)</span>
+          <span class="kpi-tag">基准对照</span>
+        </div>
+        <div class="kpi-value" id="kpiStdMoney" style="color:var(--amber);">-</div>
+        <div class="kpi-sub">
+          <span>标准无缓存等效 <b id="kpiNcStdMoney">-</b></span>
+          <span>促销实际 <b id="kpiPromoMoney">-</b></span>
+        </div>
+      </div>
+
+      <div class="card kpi-card" id="kpiCard4" style="--card-accent:#a78bfa;">
+        <div class="kpi-head">
+          <span>缓存命中率 &amp; 净节省</span>
+          <span class="kpi-tag" id="kpiSubagentTag">0 窗口</span>
+        </div>
+        <div class="kpi-value" id="kpiCacheRate">-</div>
+        <div class="progress-track">
+          <div class="progress-fill" id="kpiCacheBar" style="width:0%"></div>
+        </div>
+        <div class="kpi-sub">
+          <span>促销省 <b id="kpiSavedPromo">-</b></span>
+          <span>标准省 <b id="kpiSavedStd">-</b></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Middle Visual Row: Donut + Cost Structure -->
+    <section class="mid-grid">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">模型分布占比 <span class="card-subtitle" id="donutSubtitle">按 Token 总量</span></div>
+          </div>
+          <div class="seg-group">
+            <button type="button" class="seg-btn active" data-donut="tokens">Token 占比</button>
+            <button type="button" class="seg-btn" data-donut="cost">API 价值占比</button>
+          </div>
+        </div>
+        <div class="donut-layout">
+          <div class="donut-wrap">
+            <svg id="donutSvg" viewBox="0 0 200 200" width="205" height="205"></svg>
+            <div class="donut-center">
+              <div class="donut-center-label" id="donutCenterLabel">总计</div>
+              <div class="donut-center-val" id="donutCenterVal">-</div>
+              <div class="donut-center-sub" id="donutCenterSub">-</div>
+            </div>
+          </div>
+          <div class="legend-list" id="donutLegend"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">成本结构 &amp; 四维口径阶梯 <span class="card-subtitle">促销优惠拆解 + 无缓存对照</span></div>
+          </div>
+        </div>
+        <div class="stack-bar" id="costStackBar"></div>
+        <div class="breakdown-grid">
+          <div class="bd-item">
+            <div class="bd-left"><span class="dot" style="background:#38bdf8;"></span>未缓存输入</div>
+            <div class="bd-right"><div class="val" id="bdInVal">-</div><div class="pct" id="bdInPct">-</div></div>
+          </div>
+          <div class="bd-item">
+            <div class="bd-left"><span class="dot" style="background:#10b981;"></span>缓存命中读取</div>
+            <div class="bd-right"><div class="val" id="bdCaVal">-</div><div class="pct" id="bdCaPct">-</div></div>
+          </div>
+          <div class="bd-item">
+            <div class="bd-left"><span class="dot" style="background:#a78bfa;"></span>输出 + 思考</div>
+            <div class="bd-right"><div class="val" id="bdOutVal">-</div><div class="pct" id="bdOutPct">-</div></div>
+          </div>
+          <div class="bd-item">
+            <div class="bd-left"><span class="dot" style="background:#f59e0b;"></span>图像生成</div>
+            <div class="bd-right"><div class="val" id="bdImgVal">-</div><div class="pct" id="bdImgPct">-</div></div>
+          </div>
+        </div>
+
+        <div class="ladder-list" id="costLadder"></div>
+      </div>
+    </section>
+
+    <!-- Full Precision Model Breakdown Table -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">各模型全精度明细 <span class="card-subtitle">点击表头列可排序</span></div>
+        <div class="mono" style="font-size:11px;color:var(--text-3);" id="modelTableHint">单位: Token 精确值 · 价值按当前口径与货币显示</div>
+      </div>
+      <div class="table-wrap">
+        <table id="modelTable">
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="name">模型</th>
+              <th class="sortable" data-sort="calls">调用 / 窗口</th>
+              <th class="sortable" data-sort="in">未缓存输入</th>
+              <th class="sortable" data-sort="cache">缓存读取</th>
+              <th class="sortable" data-sort="out">输出 (含思考)</th>
+              <th class="sortable sort-active" data-sort="total">总 Token ↓</th>
+              <th class="sortable" data-sort="selected_cost">当前口径价值</th>
+              <th class="sortable" data-sort="promo">促销+缓存</th>
+              <th class="sortable" data-sort="std">官方标准+缓存</th>
+              <th class="sortable" data-sort="nc_std">标准无缓存等效</th>
+            </tr>
+          </thead>
+          <tbody id="modelTableBody"></tbody>
+          <tfoot id="modelTableFoot"></tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- Dynamic Trend SVG Chart -->
+    <section class="card">
+      <div class="card-header">
+        <div class="card-title">
+          实时消耗趋势
+          <span class="kpi-tag" id="trendGranularityBadge">-</span>
+          <span class="card-subtitle">悬停柱状图查看精确明细</span>
+        </div>
+        <div class="seg-group">
+          <button type="button" class="seg-btn active" data-trend="tokens">Token 堆叠</button>
+          <button type="button" class="seg-btn" data-trend="cost">API 价值</button>
+        </div>
+      </div>
+      <div class="trend-wrap">
+        <svg id="trendSvg" class="trend-svg"></svg>
+      </div>
+    </section>
+
+    <!-- Bottom Tabbed Windows Ranking + Live Call Feed -->
+    <section class="card">
+      <div class="card-header">
+        <div class="tab-bar">
+          <button type="button" class="tab-btn active" data-tab="live">
+            实时调用流水 <span class="tab-badge" id="badgeLive">0</span>
+          </button>
+          <button type="button" class="tab-btn" data-tab="windows">
+            窗口消耗排行 <span class="tab-badge" id="badgeWindows">0</span>
+          </button>
+        </div>
+        <div class="controls-right">
+          <input id="filterInput" class="ctrl-input" type="search" placeholder="筛选窗口或模型..." style="width:210px;" />
+        </div>
+      </div>
+
+      <div id="tabLive" class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>对话窗口</th>
+              <th>模型</th>
+              <th>未缓存输入</th>
+              <th>缓存读取</th>
+              <th>输出 (思考)</th>
+              <th>总 Token</th>
+              <th>当前口径价值</th>
+              <th>促销 / 标准</th>
+            </tr>
+          </thead>
+          <tbody id="liveFeedBody"></tbody>
+        </table>
+      </div>
+
+      <div id="tabWindows" class="table-wrap" style="display:none;">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>主对话窗口</th>
+              <th>涉及模型</th>
+              <th>调用 / 生图</th>
+              <th>未缓存输入</th>
+              <th>缓存读取</th>
+              <th>输出</th>
+              <th>总 Token</th>
+              <th>当前口径价值</th>
+              <th>最近活跃</th>
+            </tr>
+          </thead>
+          <tbody id="windowsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="footer-note">
+      <span>数据源: ~/.gemini/antigravity/conversations/*.db (只读 + WAL 增量感知)</span>
+      <span>本地服务: http://127.0.0.1:18923 · 支持浏览器与原生桌面端同步访问</span>
+    </div>
+  </div>
+
+  <div id="trendTooltip" class="trend-tooltip"></div>
+  <div id="toast" class="toast"></div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const VALID_PRESETS = new Set(["last_7d", "since_monday", "today", "last_24h", "last_5h", "last_1h", "all_time", "custom"]);
+      const savedPreset = localStorage.getItem("atm_preset");
+      const savedTz = localStorage.getItem("atm_tz");
+      const state = {
+        preset: VALID_PRESETS.has(savedPreset) ? savedPreset : "last_7d",
+        customStart: localStorage.getItem("atm_custom_start") || "",
+        customEnd: localStorage.getItem("atm_custom_end") || "",
+        pricingMode: localStorage.getItem("atm_pricing") || "promo",
+        currency: localStorage.getItem("atm_currency") || "USD",
+        fxRate: parseFloat(localStorage.getItem("atm_fx") || "7.25") || 7.25,
+        tz: ["local", "8", "0", "-8"].includes(savedTz) ? savedTz : "local",
+        refreshMs: parseInt(localStorage.getItem("atm_refresh") || "5000", 10),
+        donutMetric: "tokens",
+        trendMetric: "tokens",
+        activeTab: "live",
+        sortCol: "total",
+        sortDir: -1,
+        filterText: "",
+        data: null,
+        lastGrandTotal: null,
+        lastPromoTotal: null,
+        seenCallKeys: new Set(),
+        firstLoadDone: false,
+        pollTimer: null,
+        fetching: false,
+        highlightedModelIdx: -1
+      };
+
+      const PRICING_LABELS = {
+        promo: { title: "促销+缓存总价值", short: "促销+缓存", llmKey: "promo_llm", totalKey: "promo_total", rowKey: "promo" },
+        std: { title: "官方标准+缓存总价值", short: "标准+缓存", llmKey: "std_llm", totalKey: "std_total", rowKey: "std" },
+        nc_promo: { title: "促销无缓存等效价值", short: "促销无缓存", llmKey: "nc_promo_llm", totalKey: "nc_promo_total", rowKey: "nc_promo" },
+        nc_std: { title: "官方无缓存等效总价值", short: "标准无缓存", llmKey: "nc_std_llm", totalKey: "nc_std_total", rowKey: "nc_std" }
+      };
+
+      const GRANULARITY_LABELS = {
+        daily: "按日聚合",
+        hourly: "按小时聚合",
+        hourly_15m: "15分钟粒度",
+        minute_5m: "5分钟超细粒度"
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      function showToast(msg) {
+        const el = $("toast");
+        el.textContent = msg;
+        el.classList.add("show");
+        clearTimeout(el._timer);
+        el._timer = setTimeout(() => el.classList.remove("show"), 2600);
+      }
+
+      function escHtml(str) {
+        return String(str ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function fmtInt(n) {
+        const v = Number(n || 0);
+        return Math.round(v).toLocaleString("en-US");
+      }
+
+      function fmtCompactTok(n) {
+        const v = Number(n || 0);
+        if (v >= 1e9) return (v / 1e9).toFixed(2) + "B";
+        if (v >= 1e6) return (v / 1e6).toFixed(2) + "M";
+        if (v >= 1e3) return (v / 1e3).toFixed(1) + "K";
+        return String(Math.round(v));
+      }
+
+      function fmtMoney(usd, decimals) {
+        const val = Number(usd || 0) * (state.currency === "CNY" ? state.fxRate : 1);
+        const sym = state.currency === "CNY" ? "¥" : "$";
+        const d = decimals !== undefined ? decimals : (val >= 100 ? 2 : val >= 1 ? 3 : 4);
+        return sym + val.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+      }
+
+      function fmtMoneyFixed2(usd) {
+        return fmtMoney(usd, 2);
+      }
+
+      function effectiveTzOffsetHours() {
+        if (state.tz === "local") {
+          return -new Date().getTimezoneOffset() / 60;
+        }
+        const n = parseFloat(state.tz);
+        return Number.isFinite(n) ? n : 8;
+      }
+
+      function toIsoWithOffset(localVal) {
+        if (!localVal) return "";
+        const off = effectiveTzOffsetHours();
+        const sign = off >= 0 ? "+" : "-";
+        const absH = Math.floor(Math.abs(off));
+        const absM = Math.round((Math.abs(off) - absH) * 60);
+        const pad = (x) => String(x).padStart(2, "0");
+        const base = localVal.length === 16 ? localVal + ":00" : localVal;
+        return `${base}${sign}${pad(absH)}:${pad(absM)}`;
+      }
+
+      function buildQueryParams() {
+        const params = new URLSearchParams();
+        params.set("preset", state.preset);
+        params.set("tz", String(effectiveTzOffsetHours()));
+        if (state.preset === "custom") {
+          if (state.customStart) params.set("start", toIsoWithOffset(state.customStart));
+          if (state.customEnd) params.set("end", toIsoWithOffset(state.customEnd));
+        }
+        return params.toString();
+      }
+
+      function getModeMeta() {
+        return PRICING_LABELS[state.pricingMode] || PRICING_LABELS.promo;
+      }
+
+      function pickRowCost(row) {
+        const key = getModeMeta().rowKey;
+        return Number((row && row[key]) || 0);
+      }
+
+      function flashCard(id) {
+        const el = $(id);
+        if (!el) return;
+        el.classList.remove("flash-update");
+        void el.offsetWidth;
+        el.classList.add("flash-update");
+      }
+
+      function updateStatusBadge(mode) {
+        const pill = $("livePill");
+        const txt = $("liveStatusText");
+        pill.classList.remove("live", "paused", "offline");
+        if (mode === "offline") {
+          pill.classList.add("offline");
+          txt.textContent = "OFFLINE";
+        } else if (state.refreshMs === 0) {
+          pill.classList.add("paused");
+          txt.textContent = "PAUSED";
+        } else {
+          pill.classList.add("live");
+          txt.textContent = "LIVE";
+        }
+      }
+
+      async function fetchStats(manual) {
+        if (state.fetching) return;
+        state.fetching = true;
+        try {
+          const url = `/api/stats?${buildQueryParams()}&_=${Date.now()}`;
+          const res = await fetch(url, { cache: "no-store" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const payload = await res.json();
+          const changed =
+            state.firstLoadDone &&
+            state.lastGrandTotal !== null &&
+            (payload.summary.grand_total !== state.lastGrandTotal ||
+              payload.summary.promo_total !== state.lastPromoTotal);
+
+          state.data = payload;
+          updateStatusBadge("ok");
+          renderAll(changed);
+          state.lastGrandTotal = payload.summary.grand_total;
+          state.lastPromoTotal = payload.summary.promo_total;
+          state.firstLoadDone = true;
+          if (manual) showToast("数据已刷新");
+        } catch (err) {
+          console.error("Stats fetch error:", err);
+          updateStatusBadge("offline");
+        } finally {
+          state.fetching = false;
+        }
+      }
+
+      function renderAll(changed) {
+        const d = state.data;
+        if (!d) return;
+        const m = d.meta || {};
+        const s = d.summary || {};
+        const mode = getModeMeta();
+
+        // Header telemetry
+        $("metaActive5m").textContent = `${fmtInt(m.active_convs_5m)} 个`;
+        $("metaBurnTok").textContent = `${fmtCompactTok(s.burn_tok_per_min)} tok/m`;
+        $("metaBurnMoney").textContent = `${fmtMoney(s.burn_usd_per_hr, 2)}/h`;
+        $("metaScan").textContent = `${m.scan_ms ?? 0}ms (${m.reparsed ?? 0}/${m.db_count ?? 0}库)`;
+        $("metaServerTime").textContent = m.server_time || "-";
+
+        // Range banner
+        $("rangeLabel").textContent = m.range_label || "-";
+        $("rangeBounds").textContent = `${m.start_str || "-"}  →  ${m.end_str || "-"}`;
+        $("rangeCounts").textContent =
+          `${fmtInt(s.calls)} 次请求 · ${fmtInt(s.imgs)} 张生图 · ${fmtInt(s.root_windows_count)} 主窗口 · ${fmtInt(s.subagents_count)} 子代理`;
+
+        // KPI 1: Tokens
+        $("kpiCallsTag").textContent = `${fmtInt(s.calls)} 次调用`;
+        $("kpiTotalTokens").textContent = fmtInt(s.grand_total);
+        $("kpiInTok").textContent = fmtCompactTok(s.in);
+        $("kpiCacheTok").textContent = fmtCompactTok(s.cache);
+        $("kpiOutTok").textContent = `${fmtCompactTok(s.out)} (含思${fmtCompactTok(s.think)})`;
+        $("kpiImgs").textContent = `${fmtInt(s.imgs)} 张`;
+
+        // KPI 2: Selected pricing value
+        const selectedTotal = Number(s[mode.totalKey] || 0);
+        const selectedLlm = Number(s[mode.llmKey] || 0);
+        $("kpiSelectedTitle").textContent = mode.title;
+        $("kpiSelectedBadge").textContent = mode.short;
+        $("kpiSelectedMoney").textContent = fmtMoneyFixed2(selectedTotal);
+        $("kpiSelectedLlm").textContent = fmtMoneyFixed2(selectedLlm);
+        $("kpiImgCost").textContent = fmtMoneyFixed2(s.img_cost);
+
+        // KPI 3: Official Standard Reference
+        $("kpiStdMoney").textContent = fmtMoneyFixed2(s.std_total);
+        $("kpiNcStdMoney").textContent = fmtMoneyFixed2(s.nc_std_total);
+        $("kpiPromoMoney").textContent = fmtMoneyFixed2(s.promo_total);
+
+        // KPI 4: Cache Hit Rate & Savings
+        const hitRate = Number(s.cache_hit_rate || 0);
+        $("kpiSubagentTag").textContent = `${fmtInt(s.root_windows_count)} 窗口`;
+        $("kpiCacheRate").textContent = `${hitRate.toFixed(2)}%`;
+        $("kpiCacheBar").style.width = `${Math.min(100, Math.max(0, hitRate))}%`;
+        $("kpiSavedPromo").textContent = fmtMoneyFixed2(s.saved_promo);
+        $("kpiSavedStd").textContent = fmtMoneyFixed2(s.saved_std);
+
+        if (changed) {
+          flashCard("kpiCard1");
+          flashCard("kpiCard2");
+          flashCard("kpiCard3");
+          flashCard("kpiCard4");
+        }
+
+        renderDonut();
+        renderCostStructure();
+        renderModelTable();
+        renderTrendChart();
+        renderWindowsAndFeed();
+      }
+
+      function renderDonut() {
+        const d = state.data;
+        const models = (d && d.models) || [];
+        const svg = $("donutSvg");
+        const legend = $("donutLegend");
+        const isTokens = state.donutMetric === "tokens";
+        $("donutSubtitle").textContent = isTokens ? "按 Token 总量" : `按 ${getModeMeta().short} 价值`;
+
+        const items = models
+          .map((m) => ({
+            name: m.name,
+            color: m.color || "#64748b",
+            val: isTokens ? Number(m.total || 0) : pickRowCost(m)
+          }))
+          .filter((x) => x.val > 0);
+
+        const total = items.reduce((a, b) => a + b.val, 0);
+        $("donutCenterLabel").textContent = isTokens ? "Token 总量" : getModeMeta().short;
+        $("donutCenterVal").textContent = isTokens ? fmtCompactTok(total) : fmtMoneyFixed2(total);
+        $("donutCenterSub").textContent = `${items.length} 个模型`;
+
+        if (total <= 0) {
+          svg.innerHTML = `<circle cx="100" cy="100" r="72" fill="none" stroke="rgba(148,163,184,0.16)" stroke-width="26"></circle>`;
+          legend.innerHTML = `<div class="empty-state">该时间段暂无数据</div>`;
+          return;
+        }
+
+        const cx = 100, cy = 100, r = 72, circ = 2 * Math.PI * r;
+        let offset = 0;
+        let circles = "";
+        let legendHtml = "";
+
+        items.forEach((item, idx) => {
+          const pct = item.val / total;
+          const dash = Math.max(0, pct * circ);
+          const gap = Math.max(0, circ - dash);
+          const active = state.highlightedModelIdx === idx;
+          const sw = active ? 30 : 25;
+          const op = state.highlightedModelIdx === -1 || active ? 1 : 0.35;
+          circles += `
+            <circle cx="${cx}" cy="${cy}" r="${r}" fill="none"
+              stroke="${escHtml(item.color)}" stroke-width="${sw}"
+              stroke-dasharray="${dash.toFixed(2)} ${gap.toFixed(2)}"
+              stroke-dashoffset="${(-offset).toFixed(2)}"
+              transform="rotate(-90 ${cx} ${cy})"
+              opacity="${op}"
+              data-idx="${idx}"
+              style="cursor:pointer;transition:opacity .15s, stroke-width .15s;"></circle>`;
+          offset += dash;
+
+          legendHtml += `
+            <div class="legend-item ${active ? "active" : ""}" data-idx="${idx}">
+              <span class="dot" style="background:${escHtml(item.color)};"></span>
+              <span class="legend-name" title="${escHtml(item.name)}">${escHtml(item.name)}</span>
+              <span class="legend-val">${isTokens ? fmtCompactTok(item.val) : fmtMoneyFixed2(item.val)}</span>
+              <span class="legend-pct">${(pct * 100).toFixed(1)}%</span>
+            </div>`;
+        });
+
+        svg.innerHTML = circles;
+        legend.innerHTML = legendHtml;
+
+        const bindHover = (container) => {
+          container.querySelectorAll("[data-idx]").forEach((el) => {
+            el.addEventListener("mouseenter", () => {
+              state.highlightedModelIdx = parseInt(el.dataset.idx, 10);
+              renderDonut();
+            });
+            el.addEventListener("mouseleave", () => {
+              state.highlightedModelIdx = -1;
+              renderDonut();
+            });
+          });
+        };
+        bindHover(svg);
+        bindHover(legend);
+      }
+
+      function renderCostStructure() {
+        const s = (state.data && state.data.summary) || {};
+        const pIn = Number(s.promo_in || 0);
+        const pCa = Number(s.promo_ca || 0);
+        const pOut = Number(s.promo_out || 0);
+        const pImg = Number(s.img_cost || 0);
+        const pTot = pIn + pCa + pOut + pImg;
+
+        const pct = (x) => (pTot > 0 ? ((x / pTot) * 100).toFixed(1) + "%" : "0.0%");
+
+        $("costStackBar").innerHTML = pTot > 0
+          ? `<div class="stack-seg" style="width:${(pIn / pTot) * 100}%;background:#38bdf8;" title="未缓存输入"></div>
+             <div class="stack-seg" style="width:${(pCa / pTot) * 100}%;background:#10b981;" title="缓存读取"></div>
+             <div class="stack-seg" style="width:${(pOut / pTot) * 100}%;background:#a78bfa;" title="输出+思考"></div>
+             <div class="stack-seg" style="width:${(pImg / pTot) * 100}%;background:#f59e0b;" title="图像生成"></div>`
+          : "";
+
+        $("bdInVal").textContent = fmtMoneyFixed2(pIn);
+        $("bdInPct").textContent = pct(pIn);
+        $("bdCaVal").textContent = fmtMoneyFixed2(pCa);
+        $("bdCaPct").textContent = pct(pCa);
+        $("bdOutVal").textContent = fmtMoneyFixed2(pOut);
+        $("bdOutPct").textContent = pct(pOut);
+        $("bdImgVal").textContent = fmtMoneyFixed2(pImg);
+        $("bdImgPct").textContent = pct(pImg);
+
+        const ladders = [
+          { key: "promo", label: "促销 + 缓存 (实际)", val: Number(s.promo_total || 0), color: "#10b981" },
+          { key: "std", label: "官方标准 + 缓存", val: Number(s.std_total || 0), color: "#f59e0b" },
+          { key: "nc_promo", label: "促销无缓存等效", val: Number(s.nc_promo_total || 0), color: "#38bdf8" },
+          { key: "nc_std", label: "官方无缓存等效", val: Number(s.nc_std_total || 0), color: "#fb7185" }
+        ];
+        const maxVal = Math.max(...ladders.map((x) => x.val), 0.0001);
+        $("costLadder").innerHTML = ladders
+          .map((item) => {
+            const w = item.val > 0 ? Math.max(2, (item.val / maxVal) * 100) : 0;
+            const sel = item.key === state.pricingMode ? "selected" : "";
+            return `
+              <div class="ladder-row">
+                <div class="ladder-label ${sel}">${escHtml(item.label)}</div>
+                <div class="ladder-track"><div class="ladder-fill" style="width:${w}%;background:${item.color};"></div></div>
+                <div class="ladder-val">${fmtMoneyFixed2(item.val)}</div>
+              </div>`;
+          })
+          .join("");
+      }
+
+      function renderModelTable() {
+        const d = state.data;
+        const models = ((d && d.models) || []).map((m) => ({
+          ...m,
+          selected_cost: pickRowCost(m)
+        }));
+        const s = (d && d.summary) || {};
+        const tbody = $("modelTableBody");
+        const tfoot = $("modelTableFoot");
+
+        if (!models.length) {
+          tbody.innerHTML = `<tr><td colspan="10" class="empty-state">当前时间范围暂无模型调用记录</td></tr>`;
+          tfoot.innerHTML = "";
+          return;
+        }
+
+        const dir = state.sortDir;
+        const col = state.sortCol;
+        models.sort((a, b) => {
+          if (col === "name") return dir * String(a.name).localeCompare(String(b.name));
+          return dir * ((Number(a[col]) || 0) - (Number(b[col]) || 0));
+        });
+
+        const grandTot = Number(s.grand_total || 0);
+        tbody.innerHTML = models
+          .map((m) => {
+            const share = grandTot > 0 ? ((m.total / grandTot) * 100).toFixed(1) + "%" : "0.0%";
+            return `
+              <tr>
+                <td>
+                  <div class="model-cell">
+                    <span class="dot" style="background:${escHtml(m.color || "#64748b")};"></span>
+                    <span>${escHtml(m.name)}</span>
+                  </div>
+                </td>
+                <td>${fmtInt(m.calls)} <span class="sub-num">${fmtInt(m.conv_count)} 库</span></td>
+                <td>${fmtInt(m.in)}</td>
+                <td>${fmtInt(m.cache)}</td>
+                <td>${fmtInt(m.out)} <span class="sub-num">思 ${fmtInt(m.think)}</span></td>
+                <td><b>${fmtInt(m.total)}</b> <span class="sub-num">${share}</span></td>
+                <td class="cost-hi">${fmtMoney(m.selected_cost)}</td>
+                <td>${fmtMoney(m.promo)}</td>
+                <td class="cost-std">${fmtMoney(m.std)}</td>
+                <td>${fmtMoney(m.nc_std)}</td>
+              </tr>`;
+          })
+          .join("");
+
+        const selectedTotal = Number(s[getModeMeta().totalKey] || 0);
+        tfoot.innerHTML = `
+          <tr>
+            <td>合计 (含生图 ${fmtInt(s.imgs)} 张 = ${fmtMoneyFixed2(s.img_cost)})</td>
+            <td>${fmtInt(s.calls)}</td>
+            <td>${fmtInt(s.in)}</td>
+            <td>${fmtInt(s.cache)}</td>
+            <td>${fmtInt(s.out)} <span class="sub-num">思 ${fmtInt(s.think)}</span></td>
+            <td>${fmtInt(s.grand_total)}</td>
+            <td class="cost-hi">${fmtMoneyFixed2(selectedTotal)}</td>
+            <td>${fmtMoneyFixed2(s.promo_total)}</td>
+            <td class="cost-std">${fmtMoneyFixed2(s.std_total)}</td>
+            <td>${fmtMoneyFixed2(s.nc_std_total)}</td>
+          </tr>`;
+      }
+
+      function renderTrendChart() {
+        const d = state.data;
+        const m = (d && d.meta) || {};
+        const trend = (d && d.trend) || [];
+        const svg = $("trendSvg");
+        $("trendGranularityBadge").textContent = GRANULARITY_LABELS[m.granularity] || m.granularity || "-";
+
+        if (!trend.length) {
+          svg.setAttribute("viewBox", "0 0 900 220");
+          svg.innerHTML = `<text x="450" y="115" text-anchor="middle" fill="#64748b" font-size="13">当前时间段暂无趋势数据</text>`;
+          return;
+        }
+
+        const isCost = state.trendMetric === "cost";
+        const modeRowKey = getModeMeta().rowKey;
+        const width = Math.max(820, trend.length * 36 + 96);
+        const height = 245;
+        const padL = 62, padR = 20, padT = 22, padB = 42;
+        const plotW = width - padL - padR;
+        const plotH = height - padT - padB;
+
+        const maxY = Math.max(
+          ...trend.map((t) => (isCost ? Number(t[modeRowKey] || 0) : Number(t.total || 0))),
+          isCost ? 0.01 : 100
+        );
+
+        svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+        let html = "";
+
+        // Y-axis gridlines
+        for (let i = 0; i <= 4; i++) {
+          const frac = i / 4;
+          const y = padT + plotH - frac * plotH;
+          const labelVal = maxY * frac;
+          const labelTxt = isCost ? fmtMoney(labelVal, labelVal >= 10 ? 1 : 2) : fmtCompactTok(labelVal);
+          html += `<line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="rgba(148,163,184,0.12)" stroke-dasharray="3 3" />`;
+          html += `<text x="${padL - 8}" y="${y + 4}" text-anchor="end" fill="#64748b" font-size="10.5" font-family="ui-monospace, monospace">${escHtml(labelTxt)}</text>`;
+        }
+
+        const step = plotW / trend.length;
+        const barW = Math.min(28, Math.max(8, step * 0.64));
+        const labelEvery = trend.length > 26 ? Math.ceil(trend.length / 16) : 1;
+
+        trend.forEach((t, idx) => {
+          const cx = padL + idx * step + step / 2;
+          const x = cx - barW / 2;
+
+          if (isCost) {
+            const val = Number(t[modeRowKey] || 0);
+            const h = (val / maxY) * plotH;
+            const y = padT + plotH - h;
+            html += `<rect x="${x}" y="${y}" width="${barW}" height="${Math.max(1, h)}" rx="3" fill="#10b981" opacity="0.9"></rect>`;
+          } else {
+            const vCache = Number(t.cache || 0);
+            const vIn = Number(t.in || 0);
+            const vOut = Number(t.out || 0);
+            const hCache = (vCache / maxY) * plotH;
+            const hIn = (vIn / maxY) * plotH;
+            const hOut = (vOut / maxY) * plotH;
+            const yCache = padT + plotH - hCache;
+            const yIn = yCache - hIn;
+            const yOut = yIn - hOut;
+            html += `<rect x="${x}" y="${yCache}" width="${barW}" height="${Math.max(0, hCache)}" fill="#10b981" opacity="0.88"></rect>`;
+            html += `<rect x="${x}" y="${yIn}" width="${barW}" height="${Math.max(0, hIn)}" fill="#38bdf8" opacity="0.92"></rect>`;
+            html += `<rect x="${x}" y="${yOut}" width="${barW}" height="${Math.max(0, hOut)}" rx="2" fill="#a78bfa" opacity="0.95"></rect>`;
+          }
+
+          if (idx % labelEvery === 0 || idx === trend.length - 1) {
+            html += `<text x="${cx}" y="${height - 16}" text-anchor="middle" fill="#94a3b8" font-size="10.5" font-family="ui-monospace, monospace">${escHtml(t.label)}</text>`;
+          }
+
+          // Invisible hit target for crisp tooltip
+          html += `<rect class="trend-hit" data-tidx="${idx}" x="${padL + idx * step}" y="${padT}" width="${step}" height="${plotH + 14}" fill="transparent" style="cursor:crosshair;"></rect>`;
+        });
+
+        svg.innerHTML = html;
+
+        const tt = $("trendTooltip");
+        svg.querySelectorAll(".trend-hit").forEach((el) => {
+          el.addEventListener("mousemove", (ev) => {
+            const item = trend[parseInt(el.dataset.tidx, 10)];
+            if (!item) return;
+            tt.innerHTML = `
+              <div class="tt-title">${escHtml(item.key)} (${fmtInt(item.calls)} 次 / ${fmtInt(item.imgs)} 图)</div>
+              <div class="tt-row"><span>总 Token</span><b>${fmtInt(item.total)}</b></div>
+              <div class="tt-row"><span style="color:#38bdf8;">未缓存输入</span><b>${fmtInt(item.in)}</b></div>
+              <div class="tt-row"><span style="color:#10b981;">缓存读取</span><b>${fmtInt(item.cache)}</b></div>
+              <div class="tt-row"><span style="color:#a78bfa;">输出 (含思考)</span><b>${fmtInt(item.out)}</b></div>
+              <div class="tt-row" style="margin-top:4px;padding-top:4px;border-top:1px solid rgba(148,163,184,0.18);">
+                <span>促销+缓存</span><b style="color:#10b981;">${fmtMoney(item.promo)}</b>
+              </div>
+              <div class="tt-row"><span>标准+缓存</span><b style="color:#f59e0b;">${fmtMoney(item.std)}</b></div>
+              <div class="tt-row"><span>标准无缓存</span><b>${fmtMoney(item.nc_std)}</b></div>`;
+            tt.style.display = "block";
+            const left = Math.min(window.innerWidth - 245, ev.clientX + 14);
+            const top = Math.max(12, ev.clientY - 125);
+            tt.style.left = left + "px";
+            tt.style.top = top + "px";
+          });
+          el.addEventListener("mouseleave", () => {
+            tt.style.display = "none";
+          });
+        });
+      }
+
+      function renderWindowsAndFeed() {
+        const d = state.data;
+        const calls = (d && d.recent_calls) || [];
+        const wins = (d && d.windows) || [];
+        const q = state.filterText.trim().toLowerCase();
+
+        const filteredCalls = q
+          ? calls.filter(
+              (c) =>
+                String(c.window || "").toLowerCase().includes(q) ||
+                String(c.model || "").toLowerCase().includes(q)
+            )
+          : calls;
+
+        const filteredWins = q
+          ? wins.filter(
+              (w) =>
+                String(w.title || "").toLowerCase().includes(q) ||
+                (w.models || []).some((m) => String(m).toLowerCase().includes(q))
+            )
+          : wins;
+
+        $("badgeLive").textContent = fmtInt(filteredCalls.length);
+        $("badgeWindows").textContent = fmtInt(filteredWins.length);
+
+        const nextSeen = new Set();
+        const liveBody = $("liveFeedBody");
+        if (!filteredCalls.length) {
+          liveBody.innerHTML = `<tr><td colspan="9" class="empty-state">暂无匹配实时调用记录</td></tr>`;
+        } else {
+          liveBody.innerHTML = filteredCalls
+            .map((c) => {
+              const cKey = `${c.ts}|${c.model}|${c.total}|${c.window}`;
+              nextSeen.add(cKey);
+              const isNew = state.firstLoadDone && !state.seenCallKeys.has(cKey);
+              const sel = pickRowCost(c);
+              return `
+                <tr class="${isNew ? "flash-new" : ""}">
+                  <td><span class="mono">${escHtml(c.date_str)}</span></td>
+                  <td><div class="window-title-cell" title="${escHtml(c.window)}">${escHtml(c.window)}</div></td>
+                  <td>
+                    <span style="display:inline-flex;align-items:center;gap:6px;">
+                      <span class="dot" style="background:${escHtml(c.color || "#64748b")};"></span>
+                      <span>${escHtml(c.model)}</span>
+                    </span>
+                  </td>
+                  <td>${fmtInt(c.in)}</td>
+                  <td>${fmtInt(c.cache)}</td>
+                  <td>${fmtInt(c.out)} <span class="sub-num">思 ${fmtInt(c.think)}</span></td>
+                  <td><b>${fmtInt(c.total)}</b></td>
+                  <td class="cost-hi">${fmtMoney(sel, 4)}</td>
+                  <td>${fmtMoney(c.promo, 4)} <span class="sub-num">${fmtMoney(c.std, 4)}</span></td>
+                </tr>`;
+            })
+            .join("");
+        }
+
+        // Track unseen items globally based on full unfiltered feed
+        calls.forEach((c) => state.seenCallKeys.add(`${c.ts}|${c.model}|${c.total}|${c.window}`));
+
+        const winBody = $("windowsBody");
+        if (!filteredWins.length) {
+          winBody.innerHTML = `<tr><td colspan="10" class="empty-state">暂无匹配对话窗口</td></tr>`;
+        } else {
+          winBody.innerHTML = filteredWins
+            .map((w, idx) => {
+              const sel = pickRowCost(w);
+              const tags = (w.models || [])
+                .map((m) => `<span class="m-tag">${escHtml(m)}</span>`)
+                .join("");
+              return `
+                <tr>
+                  <td>${idx + 1}</td>
+                  <td>
+                    <div class="window-title-cell" title="${escHtml(w.title)}">
+                      <span class="dot" style="background:${escHtml(w.color || "#64748b")};display:inline-block;margin-right:6px;"></span>
+                      ${escHtml(w.title)}
+                    </div>
+                  </td>
+                  <td style="text-align:left;"><div class="model-tags">${tags}</div></td>
+                  <td>${fmtInt(w.calls)} <span class="sub-num">图 ${fmtInt(w.imgs)}</span></td>
+                  <td>${fmtInt(w.in)}</td>
+                  <td>${fmtInt(w.cache)}</td>
+                  <td>${fmtInt(w.out)}</td>
+                  <td><b>${fmtInt(w.total)}</b></td>
+                  <td class="cost-hi">${fmtMoneyFixed2(sel)}</td>
+                  <td>${escHtml(w.last_time || "-")}</td>
+                </tr>`;
+            })
+            .join("");
+        }
+      }
+
+      function renderBrowserFallbackPng() {
+        const d = state.data;
+        if (!d) return;
+        const s = d.summary || {};
+        const m = d.meta || {};
+        const models = d.models || [];
+        const mode = getModeMeta();
+        const canvas = document.createElement("canvas");
+        const w = 1360, h = 760;
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+
+        ctx.fillStyle = "#070b14";
+        ctx.fillRect(0, 0, w, h);
+
+        ctx.fillStyle = "#0f172a";
+        ctx.fillRect(28, 24, w - 56, 86);
+        ctx.strokeStyle = "rgba(148,163,184,0.22)";
+        ctx.strokeRect(28, 24, w - 56, 86);
+
+        ctx.fillStyle = "#f8fafc";
+        ctx.font = "bold 24px -apple-system, PingFang SC, sans-serif";
+        ctx.fillText("Antigravity Token & API 价值实时监控快照", 48, 62);
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "14px Menlo, PingFang SC, sans-serif";
+        ctx.fillText(`${m.range_label} (${m.start_str} -> ${m.end_str})  |  生成: ${m.server_time}`, 48, 90);
+
+        const kpis = [
+          { t: "总 Token 吞吐量", v: fmtInt(s.grand_total), c: "#38bdf8" },
+          { t: mode.title, v: fmtMoneyFixed2(s[mode.totalKey]), c: "#10b981" },
+          { t: "官方标准原价 (含缓存)", v: fmtMoneyFixed2(s.std_total), c: "#f59e0b" },
+          { t: "缓存命中率 / 节省", v: `${Number(s.cache_hit_rate || 0).toFixed(2)}% / ${fmtMoneyFixed2(s.saved_promo)}`, c: "#a78bfa" }
+        ];
+        kpis.forEach((k, i) => {
+          const kx = 28 + i * 330;
+          ctx.fillStyle = "#0b1120";
+          ctx.fillRect(kx, 130, 314, 108);
+          ctx.fillStyle = k.c;
+          ctx.fillRect(kx, 130, 314, 4);
+          ctx.fillStyle = "#94a3b8";
+          ctx.font = "14px -apple-system, PingFang SC, sans-serif";
+          ctx.fillText(k.t, kx + 18, 162);
+          ctx.fillStyle = "#f8fafc";
+          ctx.font = "bold 26px Menlo, monospace";
+          ctx.fillText(k.v, kx + 18, 206);
+        });
+
+        ctx.fillStyle = "#0b1120";
+        ctx.fillRect(28, 258, w - 56, 470);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = "bold 16px -apple-system, PingFang SC, sans-serif";
+        ctx.fillText("模型明细 Top 10", 48, 290);
+
+        let ry = 330;
+        models.slice(0, 10).forEach((row) => {
+          ctx.fillStyle = row.color || "#64748b";
+          ctx.beginPath();
+          ctx.arc(54, ry - 5, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#e2e8f0";
+          ctx.font = "14px -apple-system, PingFang SC, sans-serif";
+          ctx.fillText(row.name, 72, ry);
+          ctx.font = "14px Menlo, monospace";
+          ctx.fillStyle = "#cbd5e1";
+          ctx.fillText(`${fmtInt(row.calls)} 次`, 390, ry);
+          ctx.fillText(`${fmtInt(row.total)} tok`, 520, ry);
+          ctx.fillStyle = "#10b981";
+          ctx.fillText(`促销 ${fmtMoneyFixed2(row.promo)}`, 760, ry);
+          ctx.fillStyle = "#f59e0b";
+          ctx.fillText(`标准 ${fmtMoneyFixed2(row.std)}`, 960, ry);
+          ctx.fillStyle = "#94a3b8";
+          ctx.fillText(`无缓存 ${fmtMoneyFixed2(row.nc_std)}`, 1150, ry);
+          ry += 38;
+        });
+
+        const link = document.createElement("a");
+        link.download = `Antigravity_Token监控快照_${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.png`;
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+        showToast("已保存 PNG 快照");
+      }
+
+      function setupPolling() {
+        clearInterval(state.pollTimer);
+        updateStatusBadge();
+        if (state.refreshMs > 0) {
+          state.pollTimer = setInterval(() => fetchStats(false), state.refreshMs);
+        }
+      }
+
+      function syncControlsFromState() {
+        $("pricingMode").value = state.pricingMode;
+        $("fxRate").value = String(state.fxRate);
+        $("tzSelect").value = state.tz;
+        $("refreshInterval").value = String(state.refreshMs);
+        if (state.customStart) $("customStart").value = state.customStart;
+        if (state.customEnd) $("customEnd").value = state.customEnd;
+
+        document.querySelectorAll("#presetStrip [data-preset]").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.preset === state.preset);
+        });
+        $("customRangeBar").classList.toggle("open", state.preset === "custom");
+
+        document.querySelectorAll("[data-curr]").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.curr === state.currency);
+        });
+      }
+
+      function bindEvents() {
+        document.querySelectorAll("#presetStrip [data-preset]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.preset = btn.dataset.preset;
+            localStorage.setItem("atm_preset", state.preset);
+            syncControlsFromState();
+            if (state.preset !== "custom") {
+              fetchStats(false);
+            } else if (state.customStart || state.customEnd) {
+              fetchStats(false);
+            }
+          });
+        });
+
+        $("btnApplyCustom").addEventListener("click", () => {
+          state.customStart = $("customStart").value;
+          state.customEnd = $("customEnd").value;
+          localStorage.setItem("atm_custom_start", state.customStart);
+          localStorage.setItem("atm_custom_end", state.customEnd);
+          state.preset = "custom";
+          syncControlsFromState();
+          fetchStats(true);
+        });
+
+        $("pricingMode").addEventListener("change", (e) => {
+          state.pricingMode = e.target.value;
+          localStorage.setItem("atm_pricing", state.pricingMode);
+          renderAll(false);
+        });
+
+        document.querySelectorAll("[data-curr]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.currency = btn.dataset.curr;
+            localStorage.setItem("atm_currency", state.currency);
+            syncControlsFromState();
+            renderAll(false);
+          });
+        });
+
+        $("fxRate").addEventListener("change", (e) => {
+          const val = parseFloat(e.target.value);
+          if (Number.isFinite(val) && val > 0) {
+            state.fxRate = val;
+            localStorage.setItem("atm_fx", String(val));
+            renderAll(false);
+          }
+        });
+
+        $("tzSelect").addEventListener("change", (e) => {
+          state.tz = e.target.value;
+          localStorage.setItem("atm_tz", state.tz);
+          fetchStats(false);
+        });
+
+        $("refreshInterval").addEventListener("change", (e) => {
+          state.refreshMs = parseInt(e.target.value, 10) || 0;
+          localStorage.setItem("atm_refresh", String(state.refreshMs));
+          setupPolling();
+        });
+
+        $("btnRefreshNow").addEventListener("click", () => fetchStats(true));
+
+        $("btnExportCsv").addEventListener("click", () => {
+          const url = `/api/export.csv?${buildQueryParams()}`;
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tokenMonitor) {
+            window.webkit.messageHandlers.tokenMonitor.postMessage({
+              action: "exportCsv",
+              url: window.location.origin + url
+            });
+          } else {
+            window.location.href = url;
+          }
+        });
+
+        $("btnSnapshot").addEventListener("click", () => {
+          if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tokenMonitor) {
+            window.webkit.messageHandlers.tokenMonitor.postMessage({ action: "saveSnapshot" });
+          } else {
+            renderBrowserFallbackPng();
+          }
+        });
+
+        document.querySelectorAll("[data-donut]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.donutMetric = btn.dataset.donut;
+            document.querySelectorAll("[data-donut]").forEach((b) =>
+              b.classList.toggle("active", b === btn)
+            );
+            renderDonut();
+          });
+        });
+
+        document.querySelectorAll("[data-trend]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.trendMetric = btn.dataset.trend;
+            document.querySelectorAll("[data-trend]").forEach((b) =>
+              b.classList.toggle("active", b === btn)
+            );
+            renderTrendChart();
+          });
+        });
+
+        document.querySelectorAll("#modelTable th.sortable").forEach((th) => {
+          th.addEventListener("click", () => {
+            const col = th.dataset.sort;
+            if (state.sortCol === col) {
+              state.sortDir = -state.sortDir;
+            } else {
+              state.sortCol = col;
+              state.sortDir = col === "name" ? 1 : -1;
+            }
+            document.querySelectorAll("#modelTable th.sortable").forEach((h) => {
+              h.classList.remove("sort-active");
+              h.textContent = h.textContent.replace(/ [↑↓]$/, "");
+            });
+            th.classList.add("sort-active");
+            th.textContent += state.sortDir === -1 ? " ↓" : " ↑";
+            renderModelTable();
+          });
+        });
+
+        document.querySelectorAll("[data-tab]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            state.activeTab = btn.dataset.tab;
+            document.querySelectorAll("[data-tab]").forEach((b) =>
+              b.classList.toggle("active", b === btn)
+            );
+            $("tabLive").style.display = state.activeTab === "live" ? "block" : "none";
+            $("tabWindows").style.display = state.activeTab === "windows" ? "block" : "none";
+          });
+        });
+
+        $("filterInput").addEventListener("input", (e) => {
+          state.filterText = e.target.value;
+          renderWindowsAndFeed();
+        });
+      }
+
+      syncControlsFromState();
+      bindEvents();
+      fetchStats(false);
+      setupPolling();
+    })();
+  </script>
+</body>
+</html>

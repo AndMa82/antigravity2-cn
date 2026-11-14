@@ -640,8 +640,59 @@ function syncChuanbanThemeCore(repoDir, targetPatchDir = THEME_PATCH_DIR) {
     return { updated: changedFiles.length > 0, changedFiles, version };
 }
 
+function syncTokenMonitorFiles(repoDir, targetDir = path.join(ROOT_DIR, "tools", "token_monitor")) {
+    if (!fs.existsSync(repoDir)) return { updated: false, changedFiles: [] };
+    fs.mkdirSync(targetDir, { recursive: true });
+    const changedFiles = [];
+
+    for (const fileName of ["monitor_server.py", "README.md"]) {
+        const s = path.join(repoDir, fileName);
+        const d = path.join(targetDir, fileName);
+        if (!fs.existsSync(s) || !fs.statSync(s).isFile()) continue;
+        const sBuf = fs.readFileSync(s);
+        const dBuf = fs.existsSync(d) ? fs.readFileSync(d) : null;
+        if (!dBuf || !sBuf.equals(dBuf)) {
+            fs.writeFileSync(d, sBuf);
+            changedFiles.push(fileName);
+        }
+    }
+
+    const srcHtmlPath = path.join(repoDir, "index.html");
+    const dstHtmlPath = path.join(targetDir, "index.html");
+    if (fs.existsSync(srcHtmlPath) && fs.statSync(srcHtmlPath).isFile()) {
+        let html = fs.readFileSync(srcHtmlPath, "utf8");
+        if (!html.includes("@media (max-width: 600px)") && html.includes("  </style>")) {
+            const compactCss = `
+    @media (max-width: 600px) {
+      .app-shell { padding: 10px 10px 32px; gap: 10px; }
+      .topbar { position: static; padding: 10px 12px; gap: 8px; }
+      .brand-title { font-size: 14px; }
+      .preset-strip { overflow-x: auto; flex-wrap: nowrap; max-width: 100%; padding-bottom: 2px; }
+      .controls-right { gap: 5px; }
+      .ctrl-select, .ctrl-input, .btn-action, .seg-btn { font-size: 11px; padding: 4px 7px; }
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .kpi-val { font-size: 20px; }
+      .card { padding: 12px; border-radius: 12px; }
+      .ladder-row { grid-template-columns: 96px 1fr 72px; gap: 6px; }
+      .window-title-cell { max-width: 160px; }
+    }
+  </style>`;
+            html = html.replace("  </style>", compactCss);
+        }
+        const sBuf = Buffer.from(html, "utf8");
+        const dBuf = fs.existsSync(dstHtmlPath) ? fs.readFileSync(dstHtmlPath) : null;
+        if (!dBuf || !sBuf.equals(dBuf)) {
+            fs.writeFileSync(dstHtmlPath, sBuf);
+            changedFiles.push("index.html");
+        }
+    }
+
+    return { updated: changedFiles.length > 0, changedFiles };
+}
+
 function extractCandidatesByAdapter(src, repoDir, cacheDir) {
     const adapter = String(src.adapter || src.id || "").toLowerCase();
+    if (adapter === "token_monitor") return [];
     if (adapter === "qqxpee") return adapterQqxpee(repoDir, cacheDir);
     if (adapter === "chuanban") return adapterChuanban(repoDir);
     if (adapter === "yiheng" || adapter === "yiheng8023") return adapterYiheng(repoDir);
@@ -810,6 +861,7 @@ async function runSync(rawArgv = process.argv.slice(2)) {
     let addedCount = 0;
     let updatedCount = 0;
     let themeCoreUpdated = false;
+    let tokenMonitorUpdated = false;
     let processedAnySource = false;
 
     for (const src of enabledSources) {
@@ -840,6 +892,15 @@ async function runSync(rawArgv = process.argv.slice(2)) {
                 );
             } else {
                 console.log(`[同步] theme_patch 内核已是最新 (${themeSync.version || "latest"})。`);
+            }
+        }
+        if (src.syncTokenMonitor && !opts.dryRun) {
+            const tmSync = syncTokenMonitorFiles(fetchInfo.repoDir);
+            if (tmSync.updated) {
+                tokenMonitorUpdated = true;
+                console.log(`[同步] 已同步更新 Token Monitor: ${tmSync.changedFiles.join(", ")}`);
+            } else {
+                console.log(`[同步] Token Monitor 已是最新。`);
             }
         }
         const rawCandidates = extractCandidatesByAdapter(src, fetchInfo.repoDir, cacheDir);
@@ -998,23 +1059,23 @@ async function runSync(rawArgv = process.argv.slice(2)) {
     }
 
     if (
-        themeCoreUpdated &&
+        (themeCoreUpdated || tokenMonitorUpdated) &&
         config.autoRelocalizeAfterSync &&
         !opts.noRelocalize &&
         process.env.AG_SKIP_REAL_INSTALL !== "1"
     ) {
         try {
             const deployedManifest = path.join(os.homedir(), ".gemini", "antigravity", "theme-patch", "core", "manifest.json");
-            const installerPath = path.join(THEME_PATCH_DIR, "install.mjs");
-            if (fs.existsSync(deployedManifest) && fs.existsSync(installerPath)) {
-                console.log("[同步] 检测到本机已部署船板主题服务，正在联动热升级 theme-patch 内核...");
-                child_process.spawnSync(process.execPath, [installerPath, "install"], {
-                    cwd: THEME_PATCH_DIR,
+            const enginePath = path.join(ROOT_DIR, "localization_engine.js");
+            if (fs.existsSync(deployedManifest) && fs.existsSync(enginePath)) {
+                console.log("[同步] 检测到本机已部署主题与监控服务，正在联动热升级 theme-patch 与 Token Monitor...");
+                child_process.spawnSync(process.execPath, [enginePath, "--theme-install"], {
+                    cwd: ROOT_DIR,
                     stdio: "inherit"
                 });
             }
         } catch (err) {
-            console.warn(`[同步警告] 船板主题内核热升级异常: ${err.message}`);
+            console.warn(`[同步警告] 主题与监控服务热升级异常: ${err.message}`);
         }
     }
 

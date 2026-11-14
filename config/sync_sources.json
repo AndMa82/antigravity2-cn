@@ -42,6 +42,15 @@
       "enabled": true,
       "priority": 60,
       "adapter": "yuexps"
+    },
+    {
+      "id": "token_monitor",
+      "repo": "https://github.com/STARKTANG108/antigravity-token-monitor.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 50,
+      "adapter": "token_monitor",
+      "syncTokenMonitor": true
     }
   ]
 }

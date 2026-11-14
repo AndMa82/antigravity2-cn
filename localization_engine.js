@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const child_process = require('child_process');
+const { pathToFileURL } = require('url');
 
 // macOS 环境下自动补全 PATH，确保 npx、codesign 等工具能被顺利找到
 if (process.platform === 'darwin') {
@@ -4408,6 +4409,195 @@ function syncThemePatchOverrideDict(options = {}) {
     return { count, repoOverridePath };
 }
 
+function extractMarkedBlock(text, startMarker, endMarker) {
+    const startIdx = text.indexOf(startMarker);
+    const endIdx = startIdx >= 0 ? text.indexOf(endMarker, startIdx + startMarker.length) : -1;
+    if (startIdx >= 0 && endIdx > startIdx) {
+        return {
+            startIdx,
+            endIdx: endIdx + endMarker.length,
+            block: text.slice(startIdx, endIdx + endMarker.length)
+        };
+    }
+    return null;
+}
+
+function syncUserCustomExtensionFile(srcFile, dstFile, markerKind) {
+    if (!fs.existsSync(srcFile)) return false;
+    const srcText = fs.readFileSync(srcFile, 'utf8');
+    const startMarker = markerKind === 'css' ? '/* === AG_TOKEN_MONITOR_START === */' : '// === AG_TOKEN_MONITOR_START ===';
+    const endMarker = markerKind === 'css' ? '/* === AG_TOKEN_MONITOR_END === */' : '// === AG_TOKEN_MONITOR_END ===';
+    const srcExtracted = extractMarkedBlock(srcText, startMarker, endMarker);
+
+    fs.mkdirSync(path.dirname(dstFile), { recursive: true });
+    if (!fs.existsSync(dstFile)) {
+        fs.writeFileSync(dstFile, srcText, 'utf8');
+        return true;
+    }
+
+    const dstText = fs.readFileSync(dstFile, 'utf8');
+    if (dstText === srcText) return false;
+
+    if (!srcExtracted) {
+        if (!dstText.includes('ag-token-monitor-btn')) {
+            fs.writeFileSync(dstFile, srcText, 'utf8');
+            return true;
+        }
+        return false;
+    }
+
+    const dstExtracted = extractMarkedBlock(dstText, startMarker, endMarker);
+    if (dstExtracted) {
+        if (dstExtracted.block === srcExtracted.block) return false;
+        const merged = dstText.slice(0, dstExtracted.startIdx) + srcExtracted.block + dstText.slice(dstExtracted.endIdx);
+        fs.writeFileSync(dstFile, merged, 'utf8');
+        return true;
+    }
+
+    if (!dstText.includes('ag-token-monitor-btn')) {
+        const sep = dstText.endsWith('\n') ? '\n' : '\n\n';
+        fs.writeFileSync(dstFile, dstText + sep + srcExtracted.block + '\n', 'utf8');
+        return true;
+    }
+
+    return false;
+}
+
+function checkTokenMonitorHealthSync(host = '127.0.0.1', port = 18923) {
+    try {
+        const probeCode = `require('http').get('http://${host}:${port}/api/health',{timeout:700},r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>process.exit(r.statusCode===200&&b.includes('"ok":true')?0:1))}).on('error',()=>process.exit(1)).on('timeout',function(){this.destroy();process.exit(1)})`;
+        const res = child_process.spawnSync(process.execPath, ['-e', probeCode], {
+            stdio: 'ignore',
+            windowsHide: true,
+            timeout: 2000
+        });
+        return res.status === 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+function stopStandaloneTokenMonitor(home) {
+    const pidFile = path.join(home, '.gemini', 'antigravity', 'token-monitor', 'server.pid');
+    try {
+        if (fs.existsSync(pidFile)) {
+            const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+            if (pid > 0 && pid !== process.pid) {
+                try { process.kill(pid, 'SIGTERM'); } catch (e) {}
+            }
+            try { fs.unlinkSync(pidFile); } catch (e) {}
+        }
+    } catch (e) {}
+
+    if (process.platform === 'win32') {
+        try {
+            child_process.spawnSync(
+                'powershell.exe',
+                [
+                    '-NoProfile',
+                    '-ExecutionPolicy',
+                    'Bypass',
+                    '-Command',
+                    "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object { $_.CommandLine -like '*token-monitor*monitor_server*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+                ],
+                { windowsHide: true, stdio: 'ignore', timeout: 4000 }
+            );
+        } catch (e) {}
+    } else {
+        try {
+            child_process.spawnSync('pkill', ['-f', 'token-monitor/monitor_server'], { stdio: 'ignore', timeout: 2500 });
+        } catch (e) {}
+    }
+}
+
+function deployTokenMonitorService(home) {
+    const srcTmDir = path.join(__dirname, 'tools', 'token_monitor');
+    if (!fs.existsSync(srcTmDir)) return null;
+
+    const dstTmDir = path.join(home, '.gemini', 'antigravity', 'token-monitor');
+    fs.mkdirSync(dstTmDir, { recursive: true });
+    for (const fileName of ['index.html', 'monitor_server.mjs', 'monitor_server.py', 'README.md']) {
+        const s = path.join(srcTmDir, fileName);
+        const d = path.join(dstTmDir, fileName);
+        if (fs.existsSync(s)) {
+            fs.copyFileSync(s, d);
+        }
+    }
+
+    const deployedDaemon = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'core', 'daemon.mjs');
+    const wrapperDaemon = path.join(home, '.gemini', 'antigravity', 'scripts', 'antigravity-font-daemon.mjs');
+    if (fs.existsSync(deployedDaemon)) {
+        fs.mkdirSync(path.dirname(wrapperDaemon), { recursive: true });
+        const realDaemonUrl = pathToFileURL(deployedDaemon).href;
+        const monitorServerUrl = pathToFileURL(path.join(dstTmDir, 'monitor_server.mjs')).href;
+        const wrapperCode = `#!/usr/bin/env node
+// Auto-generated wrapper -> ${deployedDaemon}
+await import(${JSON.stringify(realDaemonUrl)});
+if (!process.argv.includes('--once')) {
+  try {
+    const { startTokenMonitorServer } = await import(${JSON.stringify(monitorServerUrl)});
+    await startTokenMonitorServer({ host: '127.0.0.1', port: 18923 });
+  } catch (e) {
+    console.warn('[Token Monitor] 随守护启动失败:', e?.message || e);
+  }
+}
+`;
+        fs.writeFileSync(wrapperDaemon, wrapperCode, { encoding: 'utf8', mode: 0o755 });
+    }
+
+    return { dstTmDir, wrapperDaemon };
+}
+
+function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
+    if (!deployedInfo) return false;
+
+    if (process.platform === 'darwin') {
+        try {
+            const uid = typeof process.getuid === 'function' ? process.getuid() : 501;
+            const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents');
+            for (const label of ['com.antigravity.customfont', 'com.antigravity.theme']) {
+                const plist = path.join(launchAgentsDir, `${label}.plist`);
+                if (fs.existsSync(plist)) {
+                    child_process.spawnSync('launchctl', ['kickstart', '-k', `gui/${uid}/${label}`], {
+                        stdio: 'ignore',
+                        timeout: 4000
+                    });
+                }
+            }
+        } catch (e) {}
+    } else if (process.platform === 'linux') {
+        try {
+            child_process.spawnSync('systemctl', ['--user', 'restart', 'antigravity-theme.service'], {
+                stdio: 'ignore',
+                timeout: 4000
+            });
+        } catch (e) {}
+    }
+
+    for (let i = 0; i < 4; i += 1) {
+        if (checkTokenMonitorHealthSync()) return true;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300);
+    }
+
+    // 兜底：若系统服务未能及时拉起，直接独立后台启动 monitor_server.mjs
+    const serverEntry = path.join(deployedInfo.dstTmDir, 'monitor_server.mjs');
+    if (fs.existsSync(serverEntry)) {
+        try {
+            const child = child_process.spawn(process.execPath, [serverEntry, '--daemon', '--host', '127.0.0.1', '--port', '18923'], {
+                detached: true,
+                stdio: 'ignore',
+                windowsHide: true
+            });
+            child.unref();
+            for (let i = 0; i < 6; i += 1) {
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+                if (checkTokenMonitorHealthSync()) return true;
+            }
+        } catch (e) {}
+    }
+    return checkTokenMonitorHealthSync();
+}
+
 function installThemePatchIfNeeded(options = {}) {
     const themePatchDir = path.join(__dirname, 'theme_patch');
     if (!fs.existsSync(path.join(themePatchDir, 'install.mjs'))) return;
@@ -4416,11 +4606,34 @@ function installThemePatchIfNeeded(options = {}) {
     console.log(`\n[主题] 检测到 theme_patch 目录，正在同步部署船板主题与实时遥测守护服务...`);
     cleanupLegacyAntigravityPatch(home);
 
+    let customChanged = false;
+    try {
+        const deployedUserDir = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user');
+        const repoCss = path.join(themePatchDir, 'user', 'custom.css');
+        const repoJs = path.join(themePatchDir, 'user', 'custom.js');
+        if (syncUserCustomExtensionFile(repoCss, path.join(deployedUserDir, 'custom.css'), 'css')) {
+            customChanged = true;
+        }
+        if (syncUserCustomExtensionFile(repoJs, path.join(deployedUserDir, 'custom.js'), 'js')) {
+            customChanged = true;
+        }
+    } catch (e) {
+        console.warn(`[主题警告] 同步 user/custom.* 扩展层异常: ${e.message}`);
+    }
+
     const res = runThemePatchCli(['install']);
     if (res.skipped) return;
     if (res.status !== 0) {
         console.warn(`[主题警告] 船板主题服务执行异常: exit=${res.status}`);
         return;
+    }
+
+    let tmDeployed = null;
+    try {
+        stopStandaloneTokenMonitor(home);
+        tmDeployed = deployTokenMonitorService(home);
+    } catch (e) {
+        console.warn(`[监控警告] 部署 Token Monitor 服务异常: ${e.message}`);
     }
 
     const enableThemeI18n = typeof options.enableThemeI18n === 'boolean'
@@ -4429,7 +4642,7 @@ function installThemePatchIfNeeded(options = {}) {
 
     try {
         const deployedUserCfgPath = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user', 'config.json');
-        let needHotReload = false;
+        let needHotReload = customChanged;
         if (fs.existsSync(deployedUserCfgPath)) {
             const cfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
             if (!cfg.modules || typeof cfg.modules !== 'object') cfg.modules = {};
@@ -4478,12 +4691,22 @@ function installThemePatchIfNeeded(options = {}) {
         } catch (e) {}
     }
 
+    if (tmDeployed) {
+        const monitorReady = restartDaemonWithMonitorIfNeeded(home, tmDeployed);
+        if (monitorReady) {
+            console.log(`[监控] Antigravity Token Monitor 已就绪: http://127.0.0.1:18923 （可在客户端右上角点击「Token 监控」或点击底部指标胶囊在内置浏览器打开）`);
+        } else {
+            console.warn(`[监控警告] Token Monitor 服务未能自动监听 18923 端口，可手动执行: node "${path.join(tmDeployed.dstTmDir, 'monitor_server.mjs')}"`);
+        }
+    }
+
     console.log(`[主题] 船板主题与实时遥测守护服务部署完成！`);
 }
 
 function uninstallThemePatchIfNeeded() {
     const { home } = resolveThemeUserHome();
     cleanupLegacyAntigravityPatch(home);
+    stopStandaloneTokenMonitor(home);
 
     const deployedDir = path.join(home, '.gemini', 'antigravity', 'theme-patch');
     const themePatchDir = path.join(__dirname, 'theme_patch');

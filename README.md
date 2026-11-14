@@ -39,6 +39,19 @@
 - **`localization_engine.js`**：核心汉化逻辑，负责 app.asar 的解包、代码注入、重新打包以及 macOS 下的自动深度重签名。
 - **`dicts/`**：汉化字典文件夹，内含按模块分类的 JSON 对照翻译字典。
 - **`scripts/`**：工程与自动化工具集，包含简繁词典对齐校验器 (`compare_dicts.js`)、版本升级全量界面/悬浮词条自动 Diff 扫描器 (`dev_tool.js scan-ui`) 及 MCP 基准清册 (`dev_tool.js dump-mcp`)。
+- **`tools/token_monitor/`**：集成开源项目 [STARKTANG108/antigravity-token-monitor](https://github.com/STARKTANG108/antigravity-token-monitor)，提供零外部依赖 Node.js (`node:sqlite` + `node:http`) 与 Python 双引擎实时 Token 与 API 价值分析后端 (`127.0.0.1:18923`)，支持自适应移动端/侧栏窄屏布局。
+
+---
+
+## 📊 内置 Token 实时监控看板（应用内内置浏览器直达）
+
+部署 `--cdp-only` 或 `--theme-install` 后，本工具会在后台守护进程中自动伴随启动本地只读遥测服务 **`http://127.0.0.1:18923`**，并在 Antigravity 客户端内无缝注入一键入口：
+
+- **右上角顶栏「`Token 监控`」按钮** & **底部输入框旁实时指标胶囊（`tok/s · TTFT · Ctx`）**：
+  - **直接点击**：自动调起 Antigravity **内置浏览器侧边栏**直接浏览实时监控看板（零弹窗、不跳出客户端）。
+  - **`Shift + 点击`**：在当前窗口内以大尺寸应用内浮层预览完整宽屏图表。
+  - **`Ctrl / Cmd + 点击`**：在系统默认外部浏览器中打开 `http://127.0.0.1:18923/`。
+- **零侵入只读采集**：直接以 SQLite Read-Only 模式读取本地 `~/.gemini/antigravity/conversations/*.db`（含实时 `-wal` 页）与 `conversation_summaries.db`，支持 4 种 API 计费口径切换、USD/CNY 汇率切换、趋势分桶、窗口排行、最新 30 条实时调用流、CSV 导出与桌面 PNG 快照；零外部 npm/pip 依赖（基于 Node.js `>= 22.13` 内置 `node:sqlite`，低版本自动回退 Python `monitor_server.py`）。
 
 ---
 
@@ -108,8 +121,8 @@ node localization_engine.js --asar --brand-title english
 
 本仓库作为个人维护的增强分支，保持与官方上游汉化及船板主题的双向可维护性：
 
-### 1. 同步上游汉化与船板主题更新
-通过内置多源同步引擎一键拉取 `qqxpee` / `yiheng8023` / `liominsb` / `yuexps` / `chuanban` 五源增量词条与 `theme_patch/core/` 内核：
+### 1. 同步上游汉化、船板主题与 Token 监控更新
+通过内置多源同步引擎一键拉取 `qqxpee` / `yiheng8023` / `liominsb` / `yuexps` / `chuanban` / `token_monitor` 六源增量词条、`theme_patch/core/` 内核与 `tools/token_monitor/` 面板：
 ```bash
 node localization_engine.js --sync --no-relocalize
 ```

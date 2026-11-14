@@ -9,11 +9,13 @@
 - **当前仓库 (Origin)**: `https://github.com/AndMa82/antigravity2-cn.git`（个人维护版本）
 - **上游仓库 (Upstream)**: `https://github.com/qqxpee/antigravity2-cn.git`（汉化官方源项目）
 - **核心增强特性**:
-  - 默认采用 **纯 CDP 零文件修改汉化 + 船板昼夜双模主题、字体与 SQLite 实时遥测 (`theme_patch/`)** 架构（基于开源项目 [Anarcadia/chuanban-antigravity-theme-patch](https://github.com/Anarcadia/chuanban-antigravity-theme-patch) 与上游多源全量词库）：
+  - 默认采用 **纯 CDP 零文件修改汉化 + 船板昼夜双模主题、字体与 SQLite 实时遥测 (`theme_patch/`) + Token 监控看板 (`tools/token_monitor/`)** 架构（基于开源项目 [Anarcadia/chuanban-antigravity-theme-patch](https://github.com/Anarcadia/chuanban-antigravity-theme-patch)、[STARKTANG108/antigravity-token-monitor](https://github.com/STARKTANG108/antigravity-token-monitor) 与上游多源全量词库）：
     - 采用「`theme_patch/core/` 只读黄金内核 + `theme_patch/user/` 无损改装层」架构，通过本地 `127.0.0.1` CDP 调试协议无侵入注入白天暖纸/黑夜原生碳黑主题、四层排版、`tok/s · TTFT · Ctx 256k` 实时指标胶囊与全量中文界面翻译。
+    - 通过 [`theme_patch/user/custom.js`](theme_patch/user/custom.js) 与 [`custom.css`](theme_patch/user/custom.css)（含 `AG_TOKEN_MONITOR_START/END` 幂等块）在客户端右上角工具栏挂载 **「Token 监控」** 按钮（并联动底部指标胶囊点击），调用原生 `openUrlInBrowserPane` 直接在 Antigravity 内置浏览器侧边栏访问 `http://127.0.0.1:18923/`（`Shift+点击` 开应用内全屏浮层，`Ctrl/Cmd+点击` 开外部浏览器）。
+    - 本地服务由守护脚本 `~/.gemini/antigravity/scripts/antigravity-font-daemon.mjs` 随行启动 [`tools/token_monitor/monitor_server.mjs`](tools/token_monitor/monitor_server.mjs)（零依赖 `node:sqlite` + `node:http`，无 `node:sqlite` 时自动回退 [`monitor_server.py`](tools/token_monitor/monitor_server.py)）。
     - 默认模式入口为 `node localization_engine.js --cdp-only`（`theme_patch/user/config.json` 中设置 `"i18n": true`，并通过 [`localization_engine.js`](localization_engine.js) 的 `syncThemePatchOverrideDict()` 将 [`dicts/`](dicts) / [`dicts_tw/`](dicts_tw) 增量词条同步至 `theme_patch/user/i18n.override.json`）。
     - **零篡改原版客户端**：Windows 与 macOS 均不修改 `app.asar` 与官方代码签名，客户端自动更新全程无缝存活且 2.5 秒免重启热生效；已移除原 Windows 免 TUN DLL 代理注入模块。
-    - 已接入 [`scripts/sync_repos.js`](scripts/sync_repos.js)（`config/sync_sources.json` 中的 `chuanban` 源），执行 `--sync` 时自动同步更新 `theme_patch/core` 内核、归并新增词条并热刷新 `user/i18n.override.json`。
+    - 已接入 [`scripts/sync_repos.js`](scripts/sync_repos.js)（`config/sync_sources.json` 中的 `chuanban` 与 `token_monitor` 源），执行 `--sync` 时自动同步更新 `theme_patch/core` 内核、`tools/token_monitor/` 面板、归并新增词条并热刷新 `user/i18n.override.json`。
     - 若需传统 ASAR 全量文件级汉化（覆盖系统原生菜单栏、`Antigravity IDE` 与外部扩展），仍可通过 `--asar` 参数手动触发（`installThemePatchIfNeeded` 会在传统 ASAR 模式下自动切换为 `"i18n": false` 避免双观察器冲突）。
 
 ---
@@ -25,11 +27,12 @@
 当上游汉化源（`qqxpee` / `yiheng8023` / `liominsb` / `yuexps`）或船板主题补丁（`Anarcadia/chuanban-antigravity-theme-patch`）发布更新时，优先通过多源同步引擎一键跟进：
 
 ```powershell
-# 一键拉取五源增量词条 + 自动更新 theme_patch/core 内核与 CDP 补充词库
+# 一键拉取六源增量词条 + 自动更新 theme_patch/core 内核、Token Monitor 与 CDP 补充词库
 node localization_engine.js --sync --no-relocalize
 
-# 仅单独同步船板主题内核与词条
+# 仅单独同步船板主题内核或 Token 监控面板
 node scripts/sync_repos.js --only chuanban --no-relocalize
+node scripts/sync_repos.js --only token_monitor --no-relocalize
 ```
 
 如需合并上游 `qqxpee/antigravity2-cn` 的引擎架构提交，仍可按需 `git fetch upstream` 审阅合并。
