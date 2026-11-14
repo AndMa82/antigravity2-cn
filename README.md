@@ -5,9 +5,9 @@
 > **支持系统**：Windows & macOS (均已内置一键脚本)  
 > **匹配版本**：Antigravity v2.28.2+  
 
-> **核心引擎**：Node.js (无需安装 Python，零依赖，极速极稳)  
-> **汉化范围**：包括软件界面、鼠标悬浮提示 (Tooltip)、顶部系统菜单、任务栏与原生系统右键菜单 (Context Menu)、内置浏览器设置、加载动画、设置面板、插件与自定义项、新手引导及登录页。  
-> **注入原理**：通过 ASAR 还原与重包，安全注入 `preload.js` 动态翻译机制，绝不修改核心二进制，一键安装与完美还原。
+> **核心引擎**：Node.js (>= 22，零第三方二进制入侵)  
+> **汉化范围**：默认采用 **纯 CDP 零文件修改热注入模式**，完整覆盖 Antigravity 2.x 聊天区、侧边栏、设置面板、弹窗、新手引导，并集成船板昼夜主题排版与实时遥测胶囊；如需兼顾系统原生顶栏/托盘菜单与 `Antigravity IDE`，可附加 `--asar` 启用传统包注入模式。  
+> **注入原理**：默认通过本机 `127.0.0.1` CDP 调试端口在渲染内存中实时汉化，**完全不修改 `app.asar` 或软件任何原版文件**，100% 保留官方数字签名并无缝兼容客户端自动更新。
 
 > [!WARNING]
 > **关于聊天历史记录/对话框内容被汉化的已知问题及匹配机制说明（开发者必读）**：
@@ -63,30 +63,34 @@
 
 ---
 
-### 2. 一键安装汉化
-1. **完全退出** Antigravity 编程软件。
-2. 进入您解压或克隆出来的 `antigravity2-cn` 文件夹：
-   - **Windows**：双击运行 **`双击安装中文汉化.bat`**。
-   - **macOS**：双击运行 **`双击安装中文汉化.command`**。
-3. 按提示选择左上角品牌显示方式：
+### 2. 一键安装汉化（默认纯 CDP 零修改模式）
+1. 进入您解压或克隆出来的 `antigravity2-cn` 文件夹：
+   - **Windows**：双击运行 **`双击安装中文汉化.bat`**（支持软件开启状态下直接运行，无需退客户端）。
+   - **macOS**：双击运行 **`双击安装中文汉化.command`**（无需管理员 `sudo` 权限，不破坏 `.app` 签名）。
+2. 按提示选择左上角品牌显示方式：
    - **显示英文 Antigravity（默认推荐）**：保留官方品牌名，避免左上角显示过长。
    - **不显示品牌名**：隐藏左上角的品牌文字。
    - **显示中文品牌名**：保持原汉化效果，显示“反重力智能编程”。
-4. 运行完成后，重新启动 Antigravity 软件，即可畅享全中文界面！
+3. 部署完成后，已打开的 Antigravity 窗口会在 **2.5 秒内自动热生效**，官方自动更新后仍持续生效！
 
-### 品牌显示命令行参数
+### 命令行参数说明
 
-如果您通过命令行运行 `localization_engine.js`，可使用 `--brand-title` 控制左上角品牌名：
+如果您通过命令行运行 `localization_engine.js`，常用参数如下：
 
 ```bash
-# 默认推荐：左上角显示 Antigravity
-node localization_engine.js --brand-title english
+# 默认推荐（方案 A）：纯 CDP 零文件修改汉化 + 船板主题（保留英文品牌名）
+node localization_engine.js --cdp-only --brand-title english
 
-# 隐藏左上角品牌名
-node localization_engine.js --brand-title hidden
+# 隐藏 / 翻译左上角品牌名
+node localization_engine.js --cdp-only --brand-title hidden
+node localization_engine.js --cdp-only --brand-title translated
 
-# 显示中文品牌名
-node localization_engine.js --brand-title translated
+# 巡检 CDP 实机注入状态与环境完整性诊断
+node localization_engine.js --theme-verify
+node localization_engine.js --theme-doctor
+
+# 可选（传统全量模式）：修改 app.asar 与 Antigravity IDE（支持原生菜单/托盘汉化）
+node localization_engine.js --asar --brand-title english
 ```
 
 ---
@@ -100,55 +104,29 @@ node localization_engine.js --brand-title translated
 
 ---
 
-## 🔌 预集成高级功能：网络透明代理自动注入 (Windows 免 TUN 方案)
-
-> 💡 **本仓库特性**：本 Fork 仓库已**原生预打包**了免 TUN 透明代理所需的核心模块（基于 [yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy) 的 MinHook DLL 劫持方案）。克隆本仓库后即可直接开箱即用，无需手动到外部下载文件！
-
-如果您处于网络受限环境（例如连通 Google AI / Gemini 接口受阻），且不希望开启系统的全局虚拟网卡/TUN 模式，本仓库支持在安装汉化时**自动联动注入 Windows 免 TUN 强制代理工具**。
-
-### 📦 开箱即用与配置说明：
-1. **开箱即用**：
-   - 项目根目录已内置 `proxy_config/version.dll` 及 `proxy_config/config.json`。
-   - 默认预设代理端口为 **`127.0.0.1:7897`**（SOCKS5 协议，完全兼容 Clash Verge Rev / Mihomo 等主流客户端）。
-2. **如需修改代理端口**：
-   - 如果您使用的是其他端口（如 Clash 的 `7890` 或 V2Ray 的 `10808`），仅需用文本编辑器打开 [`proxy_config/config.json`](proxy_config/config.json)，将 `"port": 7897` 修改为您本机的代理端口即可。
-3. **一键安装**：
-   - **Windows**：双击运行 **`双击安装中文汉化.bat`**。汉化引擎会自动检测 `proxy_config` 目录，一步完成 **“界面汉化 + 代理模块注入”**！后续软件更新后也只需双击该脚本重新应用即可。
-   - **macOS**：双击运行 **`双击安装中文汉化.command`** 即可。macOS 会自动跳过 Windows DLL 注入，保持 100% 原生纯净汉化（Mac 端直接在代理工具中开启“系统代理”或“增强模式”即可无缝生效）。
-4. **无痕卸载**：
-   - 运行 **`双击卸载还原官方英文.bat`** 时，会自动清除汉化并彻底清理安装目录下的代理文件，恢复官方纯净状态。
-
----
-
 ## 🔄 个人 Fork 维护与更新指南（含 Agent 自动化协作）
 
-本仓库作为个人维护的增强分支，保持与官方上游汉化及代理工具的双向可维护性：
+本仓库作为个人维护的增强分支，保持与官方上游汉化及船板主题的双向可维护性：
 
-### 1. 同步上游汉化项目更新（`qqxpee/antigravity2-cn`）
-当上游发布了新词典或汉化更新时，由于上游没有 `proxy_config/` 目录，直接拉取合并即可无冲突同步：
+### 1. 同步上游汉化与船板主题更新
+通过内置多源同步引擎一键拉取 `qqxpee` / `yiheng8023` / `liominsb` / `yuexps` / `chuanban` 五源增量词条与 `theme_patch/core/` 内核：
 ```bash
-# 添加并获取上游更新（首次需要添加 upstream）
+node localization_engine.js --sync --no-relocalize
+```
+
+如需合并上游 `qqxpee/antigravity2-cn` 的引擎架构提交，仍可按需使用 `git fetch upstream` 审阅合并：
+```bash
 git remote add upstream https://github.com/qqxpee/antigravity2-cn.git
 git fetch upstream
-
-# 合并上游汉化到当前分支
 git merge upstream/main
-
-# 推送到个人仓库
 git push origin main
 ```
 
-### 2. 更新代理工具模块（`yuaotian/antigravity-proxy`）
-当代理工具发布新版本时：
-1. 前往 [yuaotian/antigravity-proxy/releases](https://github.com/yuaotian/antigravity-proxy/releases) 下载最新的 `ide-win-x64.zip`；
-2. 提取 `version.dll` 覆盖到本项目的 `proxy_config/version.dll`；
-3. 执行 `git add proxy_config/version.dll` 并提交推送即可。
-
-### 3. AI 智能体（Agent）自动化操作说明
+### 2. AI 智能体（Agent）自动化操作说明
 本仓库内置了标准的 **[`AGENTS.md`](AGENTS.md)** 指南。后续您可以随时召唤 AI 助手帮您完成维护，例如：
-* **“帮我同步上游最新的汉化代码”** —— Agent 会自动执行 `git fetch/merge upstream` 并推送到您的仓库；
-* **“检查并更新 antigravity-proxy 到最新版本”** —— Agent 会自动请求 GitHub Release API 下载最新 DLL 并完成更新提交；
-* **“把代理端口改成 7890”** —— Agent 会自动调整 `config.json` 并应用更新。
+* **“帮我同步上游最新的汉化代码与词典”** —— Agent 会自动执行 `--sync` 并热更新补充词库；
+* **“巡检或修复 CDP 主题与汉化注入状态”** —— Agent 会运行 `--theme-doctor` / `--theme-verify` 诊断；
+* **“将漏译词条补充到词典并生效”** —— Agent 更新 `dicts/` 后同步至 `user/i18n.override.json`（2.5 秒热生效）。
 
 ---
 
@@ -249,11 +227,12 @@ Antigravity 2.x 的“**添加 MCP 服务器 (Add MCP Server)**”市场目录�
   - **macOS**：若双击运行 `.command` 提示无法打开或没有执行权限，可在终端中执行 `chmod +x *.command` 来授权。如果是系统安全拦截，请在“系统设置 -> 隐私与安全性”中点击“仍要打开”。本汉化包已内置自动重签名机制，修改后会重新进行 Ad-hoc 签名以防止 macOS 提示应用损坏。
 
 ### 3）软件官方更新后，汉化失效了怎么办？
-* 软件升级时，官方会覆盖 `app.asar` 文件。您无需担心，直接完全退出软件，重新双击运行 **`双击安装中文汉化.bat`**（macOS 用户运行 **`双击安装中文汉化.command`**）重新注入一次即可完美恢复中文。
+* 默认使用的 **纯 CDP 零修改模式** 不改动 `app.asar` 与应用签名，官方自动升级后守护服务仍会自动对新版窗口注入中文，通常**无需任何人工操作**（若希望同步上游最新词条，运行一次 `node localization_engine.js --sync` 或重新双击安装脚本即可）。
+* 若您手动选择了传统 `--asar` 模式，则软件升级覆盖 `app.asar` 后重新双击运行安装脚本或等待自愈守护恢复即可。
 
 ---
 
 ## 🤝 致谢
 - 感谢所有参与测试与反馈的贡献者！
-- 特别鸣谢 **[yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)** 提供优秀的 Windows 免 TUN 强制代理注入方案。
+- 特别鸣谢 **[Anarcadia/chuanban-antigravity-theme-patch](https://github.com/Anarcadia/chuanban-antigravity-theme-patch)** 提供优秀的纯 CDP 昼夜主题、实时遥测与无侵入内存注入架构。
 - 特别鸣谢 **[yiheng8023/antigravity-chinese](https://github.com/yiheng8023/antigravity-chinese)** 开放的词典成果（MIT 协议），为本次 v2.26.0+ 新增特性词条整合提供了重要基础。

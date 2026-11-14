@@ -133,8 +133,8 @@ async function resolveGitProxy(proxySetting) {
         "";
     if (envProxy) return envProxy;
 
-    // 优先探测 .cursorrules 指定端口 18080，其次常见本地代理端口
-    const candidatePorts = [18080, 7897, 7890, 10808, 10809, 6152];
+    // 优先探测常用本地代理端口 7890，其次 7897 及 .cursorrules 端口 18080 等
+    const candidatePorts = [7890, 7897, 18080, 10808, 10809, 6152];
     for (const port of candidatePorts) {
         if (await checkLocalPortOpen(port, 300)) {
             return `http://127.0.0.1:${port}`;
@@ -332,7 +332,7 @@ function generateUpstreamEngineAudit(upstreamRepoDir, auditOutPath) {
             `- Generated At: ${new Date().toISOString()}`,
             `- Upstream Engine Size: ${(Buffer.byteLength(upCode, "utf8") / 1024).toFixed(1)} KB`,
             `- Local Engine Size: ${(Buffer.byteLength(locCode, "utf8") / 1024).toFixed(1)} KB`,
-            `- Local \`proxy_config/version.dll\` & Custom Modules Protected: YES`,
+            `- Theme Patch \`core/\` & \`user/\` Layers Protected: YES`,
             "",
             `## Anchor / Dynamic Regex Patterns Present Only in Upstream (${newInUpstream.length})`,
             ""
@@ -955,21 +955,45 @@ async function runSync(rawArgv = process.argv.slice(2)) {
     state.updatedAt = new Date().toISOString();
     fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + "\n", "utf8");
 
-    // Stage 5: 自动重汉化联动
-    if (
-        (addedCount > 0 || updatedCount > 0) &&
-        config.autoRelocalizeAfterSync &&
-        !opts.noRelocalize &&
-        process.env.AG_SKIP_REAL_INSTALL !== "1"
-    ) {
+    // Stage 5: 自动重汉化与 CDP 补充词库同步联动
+    if (addedCount > 0 || updatedCount > 0) {
+        const deployedCfgPath = path.join(os.homedir(), ".gemini", "antigravity", "theme-patch", "user", "config.json");
+        let cdpI18nEnabled = false;
         try {
-            const autoHealPath = path.join(__dirname, "auto_heal.js");
-            if (fs.existsSync(autoHealPath)) {
-                const { handlePostSyncRelocalize } = require("./auto_heal");
-                handlePostSyncRelocalize({ addedCount, updatedCount });
+            if (fs.existsSync(deployedCfgPath)) {
+                const cfg = JSON.parse(fs.readFileSync(deployedCfgPath, "utf8"));
+                cdpI18nEnabled = Boolean(cfg && cfg.modules && cfg.modules.i18n === true);
             }
-        } catch (err) {
-            console.warn(`[同步警告] 联动重汉化触发异常: ${err.message}`);
+        } catch (_) {}
+
+        if (cdpI18nEnabled) {
+            try {
+                const { syncThemePatchOverrideDict } = require("../localization_engine");
+                syncThemePatchOverrideDict();
+            } catch (err) {
+                console.warn(`[同步警告] CDP 补充词库更新异常: ${err.message}`);
+            }
+        }
+
+        if (
+            config.autoRelocalizeAfterSync &&
+            !opts.noRelocalize &&
+            process.env.AG_SKIP_REAL_INSTALL !== "1"
+        ) {
+            try {
+                const autoHealPath = path.join(__dirname, "auto_heal.js");
+                if (fs.existsSync(autoHealPath)) {
+                    const { probeAllTargets, handlePostSyncRelocalize } = require("./auto_heal");
+                    const targets = probeAllTargets();
+                    const hasLocalizedFileTarget =
+                        targets.apps.some(a => a.localized) || targets.extensions.some(e => e.localized);
+                    if (!cdpI18nEnabled || hasLocalizedFileTarget) {
+                        handlePostSyncRelocalize({ addedCount, updatedCount });
+                    }
+                }
+            } catch (err) {
+                console.warn(`[同步警告] 联动重汉化触发异常: ${err.message}`);
+            }
         }
     }
 

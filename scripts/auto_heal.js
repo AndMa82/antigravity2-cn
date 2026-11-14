@@ -14,7 +14,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const child_process = require("child_process");
-const { isAsarLocalizedFast } = require("./asar_patcher");
+const { isAsarLocalizedFast, readFileFromAsar } = require("./asar_patcher");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const ENGINE_SCRIPT = path.join(ROOT_DIR, "localization_engine.js");
@@ -435,6 +435,18 @@ function readTargetVersion(targetDir) {
                 if (pkg.version) return String(pkg.version);
             }
         }
+        const asarCandidates = [
+            path.join(targetDir, "Contents", "Resources", "app.asar"),
+            path.join(targetDir, "resources", "app.asar"),
+            path.join(targetDir, "app.asar")
+        ];
+        for (const ap of asarCandidates) {
+            if (fs.existsSync(ap)) {
+                const pkgRaw = readFileFromAsar(ap, "package.json", "utf8");
+                const pkg = JSON.parse(pkgRaw);
+                if (pkg.version) return String(pkg.version);
+            }
+        }
     } catch (_) {}
     return "unknown";
 }
@@ -448,18 +460,13 @@ function probeAppTargetStatus(installDir) {
     const asarPath = asarCandidates.find(p => fs.existsSync(p));
     if (asarPath) {
         let localized = isAsarLocalizedFast(asarPath);
-        let proxyDllOk = true;
-        if (process.platform === "win32" && fs.existsSync(path.join(ROOT_DIR, "proxy_config", "version.dll"))) {
-            proxyDllOk = fs.existsSync(path.join(installDir, "version.dll"));
-        }
         return {
             kind: "desktop-v2",
             path: installDir,
             asarPath,
             version: readTargetVersion(installDir),
-            localized: localized && proxyDllOk,
-            asarLocalized: localized,
-            proxyDllOk
+            localized,
+            asarLocalized: localized
         };
     }
 
@@ -480,19 +487,14 @@ function probeAppTargetStatus(installDir) {
             ? fs.readFileSync(wbHtml, "utf8").includes("ag_agent_hanhua.js")
             : false;
         const extOk = fs.existsSync(extJs) ? hasTailSignatureFast(extJs, EXT_HOOK_END) : true;
-        let proxyDllOk = true;
-        if (process.platform === "win32" && fs.existsSync(path.join(ROOT_DIR, "proxy_config", "version.dll"))) {
-            proxyDllOk = fs.existsSync(path.join(installDir, "version.dll"));
-        }
         return {
             kind: "ide",
             path: installDir,
             appDir,
             version: readTargetVersion(installDir),
-            localized: htmlOk && extOk && proxyDllOk,
+            localized: htmlOk && extOk,
             htmlOk,
-            extOk,
-            proxyDllOk
+            extOk
         };
     }
 
@@ -770,6 +772,28 @@ function createMacLauncherBundle(targetAppPath, launcherDir) {
     return bundlePath;
 }
 
+function getWindowsShortcutSlots(home) {
+    const startMenuPrograms = path.join(process.env.APPDATA || "", "Microsoft", "Windows", "Start Menu", "Programs");
+    return [
+        { slot: "0", dir: path.join(home, "Desktop"), createIfMissing: true },
+        { slot: "1", dir: process.env.OneDrive ? path.join(process.env.OneDrive, "Desktop") : "", createIfMissing: false },
+        { slot: "2", dir: startMenuPrograms, createIfMissing: false },
+        { slot: "3", dir: path.join(startMenuPrograms, "Antigravity"), createIfMissing: false },
+        { slot: "4", dir: path.join(startMenuPrograms, "Antigravity IDE"), createIfMissing: false }
+    ];
+}
+
+function isWindowsShortcutWrapped(lnkPath, vbsName) {
+    try {
+        if (!lnkPath || !fs.existsSync(lnkPath)) return false;
+        const buf = fs.readFileSync(lnkPath);
+        if (buf.includes(Buffer.from(vbsName, "utf16le"))) return true;
+        if (buf.includes(Buffer.from(vbsName, "utf8"))) return true;
+        if (buf.includes(Buffer.from("MOCK_LNK:", "utf8"))) return true;
+    } catch (_) {}
+    return false;
+}
+
 function writeWindowsVbsFile(filePath, content) {
     // Windows wscript.exe 不支持 UTF-8，含中文/Unicode 路径时必须使用带 BOM 的 UTF-16LE
     const withBom = content.startsWith("\uFEFF") ? content : "\uFEFF" + content;
@@ -821,25 +845,31 @@ function createWindowsLauncherVbs(targetInstallDir, launcherDir, options = {}) {
         const { home } = resolveRealUserAndHome();
         const backupDir = path.join(launcherDir, "shortcut_backups");
         const createdManifestPath = path.join(backupDir, "created_shortcuts.json");
+        const backupMapPath = path.join(backupDir, "backup_map.json");
         fs.mkdirSync(backupDir, { recursive: true });
         let createdList = [];
         if (fs.existsSync(createdManifestPath)) {
             try { createdList = JSON.parse(fs.readFileSync(createdManifestPath, "utf8")) || []; } catch (_) {}
         }
+        let backupMap = {};
+        if (fs.existsSync(backupMapPath)) {
+            try { backupMap = JSON.parse(fs.readFileSync(backupMapPath, "utf8")) || {}; } catch (_) {}
+        }
         const shortcutName = isIde ? "Antigravity IDE.lnk" : "Antigravity.lnk";
-        const desktopDirs = [
-            path.join(home, "Desktop"),
-            process.env.OneDrive ? path.join(process.env.OneDrive, "Desktop") : null,
-            path.join(process.env.APPDATA || "", "Microsoft", "Windows", "Start Menu", "Programs")
-        ].filter(d => d && fs.existsSync(d));
+        const slots = getWindowsShortcutSlots(home);
 
-        for (let idx = 0; idx < desktopDirs.length; idx++) {
-            const lnkPath = path.join(desktopDirs[idx], shortcutName);
+        for (const entry of slots) {
+            if (!entry.dir || !fs.existsSync(entry.dir)) continue;
+            const lnkPath = path.join(entry.dir, shortcutName);
             const existedBefore = fs.existsSync(lnkPath);
-            if (!existedBefore && idx > 0) continue;
-            const bakLnk = path.join(backupDir, `${idx}_${shortcutName}`);
-            if (existedBefore && !fs.existsSync(bakLnk) && !createdList.includes(lnkPath)) {
-                try { fs.copyFileSync(lnkPath, bakLnk); } catch (_) {}
+            if (!existedBefore && !entry.createIfMissing) continue;
+            const bakFileName = `${entry.slot}_${shortcutName}`;
+            const bakLnk = path.join(backupDir, bakFileName);
+            if (existedBefore && !fs.existsSync(bakLnk) && !createdList.includes(lnkPath) && !isWindowsShortcutWrapped(lnkPath, vbsName)) {
+                try {
+                    fs.copyFileSync(lnkPath, bakLnk);
+                    backupMap[bakFileName] = lnkPath;
+                } catch (_) {}
             } else if (!existedBefore && !createdList.includes(lnkPath)) {
                 createdList.push(lnkPath);
             }
@@ -854,9 +884,38 @@ function createWindowsLauncherVbs(targetInstallDir, launcherDir, options = {}) {
             }
         }
         fs.writeFileSync(createdManifestPath, JSON.stringify(createdList, null, 2) + "\n", "utf8");
+        fs.writeFileSync(backupMapPath, JSON.stringify(backupMap, null, 2) + "\n", "utf8");
     }
 
     return vbsPath;
+}
+
+function ensureWindowsLauncherShortcuts(appDirs, options = {}) {
+    if (process.platform !== "win32" || options.skipShortcuts) return;
+    const paths = getStatePaths();
+    const slots = getWindowsShortcutSlots(paths.home);
+
+    for (const appDir of appDirs || []) {
+        const isIde = appDir.toLowerCase().includes("ide");
+        const vbsName = isIde ? "launcher_ide.vbs" : "launcher_client.vbs";
+        const vbsPath = path.join(paths.winLauncherDir, vbsName);
+        if (!fs.existsSync(vbsPath)) continue;
+
+        const shortcutName = isIde ? "Antigravity IDE.lnk" : "Antigravity.lnk";
+        let needsRepair = false;
+        for (const entry of slots) {
+            if (!entry.dir || !fs.existsSync(entry.dir)) continue;
+            const lnkPath = path.join(entry.dir, shortcutName);
+            if (fs.existsSync(lnkPath) && !isWindowsShortcutWrapped(lnkPath, vbsName)) {
+                needsRepair = true;
+                break;
+            }
+        }
+        if (needsRepair) {
+            createWindowsLauncherVbs(appDir, paths.winLauncherDir, options);
+            appendGuardLog(`Guard re-aligned Windows shortcuts for: ${appDir}`);
+        }
+    }
 }
 
 function createLaunchers(options = {}) {
@@ -911,17 +970,37 @@ function removeLaunchers(options = {}) {
     } else {
         const backupDir = path.join(paths.winLauncherDir, "shortcut_backups");
         if ((process.platform === "win32" || options.simulateWinShortcuts) && fs.existsSync(backupDir) && !options.skipShortcuts) {
+            const restoredTargets = new Set();
+            const backupMapPath = path.join(backupDir, "backup_map.json");
+            if (fs.existsSync(backupMapPath)) {
+                try {
+                    const backupMap = JSON.parse(fs.readFileSync(backupMapPath, "utf8")) || {};
+                    for (const [bakName, destLnk] of Object.entries(backupMap)) {
+                        const bakFile = path.join(backupDir, bakName);
+                        if (destLnk && fs.existsSync(bakFile) && fs.existsSync(path.dirname(destLnk))) {
+                            try {
+                                fs.copyFileSync(bakFile, destLnk);
+                                fs.unlinkSync(bakFile);
+                                restoredTargets.add(path.resolve(destLnk).toLowerCase());
+                            } catch (_) {}
+                        }
+                    }
+                    fs.unlinkSync(backupMapPath);
+                } catch (_) {}
+            }
             const desktopDirs = [
                 path.join(paths.home, "Desktop"),
                 process.env.OneDrive ? path.join(process.env.OneDrive, "Desktop") : null,
                 path.join(process.env.APPDATA || "", "Microsoft", "Windows", "Start Menu", "Programs")
-            ].filter(Boolean);
+            ].filter(d => d && fs.existsSync(d));
             for (const f of fs.readdirSync(backupDir)) {
                 const m = f.match(/^(\d+)_(.+\.lnk)$/);
                 if (m && desktopDirs[Number(m[1])]) {
                     const destLnk = path.join(desktopDirs[Number(m[1])], m[2]);
                     try {
-                        fs.copyFileSync(path.join(backupDir, f), destLnk);
+                        if (!restoredTargets.has(path.resolve(destLnk).toLowerCase())) {
+                            fs.copyFileSync(path.join(backupDir, f), destLnk);
+                        }
                         fs.unlinkSync(path.join(backupDir, f));
                     } catch (_) {}
                 }
@@ -1172,6 +1251,15 @@ function installGuard(options = {}) {
         writeWindowsVbsFile(guardVbsPath, vbsContent);
 
         if (process.platform === "win32" && !options.skipSchtasks) {
+            if (fs.existsSync(paths.guardPidPath)) {
+                try {
+                    const oldPid = Number(fs.readFileSync(paths.guardPidPath, "utf8").trim());
+                    if (oldPid && oldPid !== process.pid && isPidAlive(oldPid)) {
+                        try { process.kill(oldPid); } catch (_) {}
+                    }
+                } catch (_) {}
+                try { fs.unlinkSync(paths.guardPidPath); } catch (_) {}
+            }
             const tr = `wscript.exe //B //NoLogo "${guardVbsPath}"`;
             // 1) HKCU\...\Run 负责开机登录桌面时由 explorer.exe 直接拉起（无需管理员权限）
             child_process.spawnSync(
@@ -1370,6 +1458,10 @@ async function runGuardTick(options = {}) {
     // Step 2: 检查 Desktop / IDE 主客户端
     const unlocalizedApps = status.apps.filter(a => !a.localized);
 
+    if (unlocalizedApps.length > 0) {
+        ensureWindowsLauncherShortcuts(status.apps.map(a => a.path), options);
+    }
+
     if (unlocalizedApps.length === 0 && !hasPending) {
         return { action: patchedExtensions > 0 ? "patched_ext" : "noop", patchedExtensions, patchedApps: 0 };
     }
@@ -1386,53 +1478,104 @@ async function runGuardTick(options = {}) {
     }
 
     const targetsToPatch = unlocalizedApps.length > 0 ? unlocalizedApps : status.apps;
-    const targetPathsToCheck = targetsToPatch.map(a => a.path);
-
-    if (isClientOrUpdaterRunning(targetPathsToCheck)) {
-        writePendingFlag("client_running_deferred");
-        appendGuardLog("Detected unlocalized/updated client while running; deferred via pending_patch.flag");
-        return { action: "deferred_busy", patchedExtensions, patchedApps: 0 };
-    }
-
-    // 空闲静默确认窗口（默认 8s，确认非官方更新器重启间隙）
-    if (quietWindowMs > 0) {
-        await sleepMs(Math.floor(quietWindowMs / 2));
-        if (isClientOrUpdaterRunning(targetPathsToCheck)) {
-            writePendingFlag("updater_restarting_deferred");
-            return { action: "deferred_restarting", patchedExtensions, patchedApps: 0 };
-        }
-        await sleepMs(quietWindowMs - Math.floor(quietWindowMs / 2));
-        if (isClientOrUpdaterRunning(targetPathsToCheck)) {
-            writePendingFlag("updater_restarting_deferred");
-            return { action: "deferred_restarting", patchedExtensions, patchedApps: 0 };
+    const runningApps = [];
+    const idleApps = [];
+    for (const app of targetsToPatch) {
+        if (isClientOrUpdaterRunning([app.path])) {
+            runningApps.push(app);
+        } else {
+            idleApps.push(app);
         }
     }
-    const lockRes = withPatchLock("guard-idle", () => {
-        let okCount = 0;
-        for (const app of targetsToPatch) {
-            const args = buildEngineArgsFromPrefs(["--install-dir", app.path]);
-            const r = options.customEngineRunner
-                ? options.customEngineRunner(args, [app.path])
-                : runEngineSubprocess(args, [app.path]);
-            if (r && r.ok) {
-                okCount++;
-                appendGuardLog(`Guard silently healed idle client: ${app.path}`);
+
+    const effectiveQuietMs = typeof options.quietWindowMs === "number"
+        ? options.quietWindowMs
+        : (hasPending ? 3000 : 6000);
+
+    if (idleApps.length > 0 && effectiveQuietMs > 0) {
+        await sleepMs(Math.floor(effectiveQuietMs / 2));
+        const stillIdleHalf = [];
+        for (const app of idleApps) {
+            if (isClientOrUpdaterRunning([app.path])) {
+                runningApps.push(app);
             } else {
-                appendGuardLog(`Guard failed on ${app.path}: ${(r && r.stderr) || "unknown error"}`);
+                stillIdleHalf.push(app);
             }
         }
-        return okCount;
-    });
+        idleApps.length = 0;
+        idleApps.push(...stillIdleHalf);
 
-    if (!lockRes.skipped) {
-        patchedApps = lockRes.result || 0;
-        const postCheck = probeAllTargets(options);
-        if (postCheck.apps.every(a => a.localized) && postCheck.extensions.every(e => e.localized)) {
-            clearPendingFlag();
+        if (idleApps.length > 0) {
+            await sleepMs(effectiveQuietMs - Math.floor(effectiveQuietMs / 2));
+            const stillIdleFull = [];
+            for (const app of idleApps) {
+                if (isClientOrUpdaterRunning([app.path])) {
+                    runningApps.push(app);
+                } else {
+                    stillIdleFull.push(app);
+                }
+            }
+            idleApps.length = 0;
+            idleApps.push(...stillIdleFull);
         }
     }
 
-    return { action: "healed_idle", patchedExtensions, patchedApps };
+    const readyApps = [];
+    for (const app of idleApps) {
+        if (isClientOrUpdaterRunning([app.path])) {
+            runningApps.push(app);
+        } else {
+            readyApps.push(app);
+        }
+    }
+
+    let failedCount = 0;
+    let lockSkipped = false;
+    if (readyApps.length > 0) {
+        const lockRes = withPatchLock("guard-idle", () => {
+            let okCount = 0;
+            for (const app of readyApps) {
+                const args = buildEngineArgsFromPrefs(["--install-dir", app.path]);
+                const r = options.customEngineRunner
+                    ? options.customEngineRunner(args, [app.path])
+                    : runEngineSubprocess(args, [app.path]);
+                if (r && r.ok) {
+                    okCount++;
+                    appendGuardLog(`Guard silently healed idle client: ${app.path}`);
+                } else {
+                    failedCount++;
+                    appendGuardLog(`Guard failed on ${app.path}: ${(r && r.stderr) || "unknown error"}`);
+                }
+            }
+            return okCount;
+        });
+
+        lockSkipped = Boolean(lockRes.skipped);
+        if (!lockRes.skipped) {
+            patchedApps = lockRes.result || 0;
+        }
+    }
+
+    if (runningApps.length > 0 || failedCount > 0 || lockSkipped) {
+        if (runningApps.length > 0 && (!hasPending || pendingReason !== "client_running_deferred")) {
+            appendGuardLog("Detected unlocalized/updated client while running; deferred via pending_patch.flag");
+        }
+        writePendingFlag(isDictSyncPending ? pendingReason : "client_running_deferred");
+        if (patchedApps === 0 && runningApps.length > 0) {
+            return { action: "deferred_busy", patchedExtensions, patchedApps: 0 };
+        }
+    }
+
+    const postCheck = probeAllTargets(options);
+    if (postCheck.apps.every(a => a.localized) && postCheck.extensions.every(e => e.localized) && runningApps.length === 0) {
+        clearPendingFlag();
+    }
+
+    return {
+        action: patchedApps > 0 ? "healed_idle" : (patchedExtensions > 0 ? "patched_ext" : "deferred_busy"),
+        patchedExtensions,
+        patchedApps
+    };
 }
 
 function collectStatFingerprint(options = {}) {
@@ -1477,7 +1620,7 @@ function collectStatFingerprint(options = {}) {
 }
 
 /**
- * Windows 专用零句柄 statSync 轮询守护循环（每 20s 轮询一次，绝不占用目录句柄）
+ * Windows 专用零句柄 statSync 轮询守护循环（常规 20s，存在挂起待修复任务时 3s 极速检测，绝不占用目录句柄）
  */
 async function runGuardDaemon(options = {}) {
     const paths = getStatePaths();
@@ -1491,7 +1634,6 @@ async function runGuardDaemon(options = {}) {
         } catch (_) {}
     }
     fs.writeFileSync(paths.guardPidPath, String(process.pid), "utf8");
-    const intervalMs = options.pollIntervalMs || 20000;
     let lastFingerprint = "";
 
     const cleanup = () => {
@@ -1518,7 +1660,8 @@ async function runGuardDaemon(options = {}) {
         } catch (err) {
             appendGuardLog(`Daemon tick error: ${err.message}`);
         }
-        await sleepMs(intervalMs);
+        const waitMs = options.pollIntervalMs || (fs.existsSync(paths.pendingFlagPath) ? 3000 : 20000);
+        await sleepMs(waitMs);
     }
 }
 
@@ -1533,17 +1676,33 @@ function handlePostSyncRelocalize({ addedCount = 0, updatedCount = 0 } = {}) {
         });
     }
 
-    if (isClientOrUpdaterRunning()) {
+    const appDirs = discoverClientAndIdeDirs();
+    let hasRunningApp = false;
+    let patchedIdleCount = 0;
+
+    for (const appDir of appDirs) {
+        if (isClientOrUpdaterRunning([appDir])) {
+            hasRunningApp = true;
+        } else {
+            const res = withPatchLock("sync-idle", () => {
+                return runEngineSubprocess(buildEngineArgsFromPrefs(["--install-dir", appDir]), [appDir]);
+            });
+            if (!res.skipped && res.result && res.result.ok) {
+                patchedIdleCount++;
+            } else {
+                hasRunningApp = true;
+            }
+        }
+    }
+
+    if (hasRunningApp) {
         writePendingFlag(`dict_sync:${addedCount + updatedCount}`);
         console.log(
-            `[同步联动] 检测到客户端正在运行，已写入延迟重汉化标记 (~/.antigravity-hanhua/pending_patch.flag)，将在客户端退出或下次通过启动器打开时自动生效。`
+            `[同步联动] 检测到部分客户端正在运行，已写入延迟重汉化标记 (~/.antigravity-hanhua/pending_patch.flag)，将在客户端退出或下次通过启动器打开时自动生效。`
         );
     } else {
-        const res = withPatchLock("sync-idle", () => {
-            return runEngineSubprocess(buildEngineArgsFromPrefs());
-        });
-        if (!res.skipped && res.result && res.result.ok) {
-            clearPendingFlag();
+        clearPendingFlag();
+        if (patchedIdleCount > 0) {
             console.log("[同步联动] 客户端处于空闲状态，已完成静默自动重汉化！");
         }
     }
@@ -1635,6 +1794,7 @@ if (require.main === module) {
 module.exports = {
     getStatePaths,
     isPidAlive,
+    isClientOrUpdaterRunning,
     acquirePatchLock,
     withPatchLock,
     resolveJsRunner,

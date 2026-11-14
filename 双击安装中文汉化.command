@@ -12,9 +12,23 @@ for p in "$REAL_HOME"/.nvm/versions/node/*/bin /opt/homebrew/opt/node@*/bin /usr
     [ -d "$p" ] && export PATH="$p:$PATH"
 done
 
-# 检查应用目录是否需要 root 权限（若当前用户已拥有写入权限则无需输入 sudo 密码）
+# 检查是否显式要求 --asar；默认采用纯 CDP 无修改方案（无需 root/修改 .app）
+USE_ASAR=false
+HAS_BRAND_ARG=false
+HAS_CUSTOM_INSTALL_DIR=false
+for arg in "$@"; do
+    if [[ "$arg" == "--asar" ]]; then
+        USE_ASAR=true
+    elif [[ "$arg" == --brand-title* ]]; then
+        HAS_BRAND_ARG=true
+    elif [[ "$arg" == --install-dir* ]]; then
+        HAS_CUSTOM_INSTALL_DIR=true
+    fi
+done
+
+# 检查应用目录是否需要 root 权限（仅 --asar 模式且无写入权限时需要 sudo）
 NEED_SUDO=false
-if [ "$EUID" -ne 0 ]; then
+if [ "$USE_ASAR" = true ] && [ "$EUID" -ne 0 ]; then
     for app_res in "/Applications/Antigravity.app/Contents/Resources" "/Applications/Antigravity IDE.app/Contents/Resources"; do
         if [ -d "$app_res" ] && [ ! -w "$app_res" ]; then
             NEED_SUDO=true
@@ -44,18 +58,10 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
-# 检查是否已通过命令行传入 --brand-title
-HAS_BRAND_ARG=false
-HAS_CUSTOM_INSTALL_DIR=false
-for arg in "$@"; do
-    if [[ "$arg" == --brand-title* ]]; then
-        HAS_BRAND_ARG=true
-    elif [[ "$arg" == --install-dir* ]]; then
-        HAS_CUSTOM_INSTALL_DIR=true
-    fi
-done
-
 EXTRA_ARGS=()
+if [ "$USE_ASAR" = false ]; then
+    EXTRA_ARGS+=(--cdp-only)
+fi
 if [ "$HAS_BRAND_ARG" = false ]; then
     BRAND_MODE="english"
     if [ -t 0 ]; then

@@ -2337,7 +2337,7 @@ function __applyMacProxyAndEnv(targetEnv, electronApp) {
                 }
             } catch (e) {}
             if (!proxyUrl) {
-                const candidatePorts = [18080, 7897, 7890, 10808, 10809, 6152];
+                const candidatePorts = [7890, 7897, 18080, 10808, 10809, 6152];
                 for (const p of candidatePorts) {
                     try {
                         const r = cp.spawnSync('/usr/bin/nc', ['-z', '-G', '1', '127.0.0.1', String(p)], { timeout: 600 });
@@ -2695,8 +2695,10 @@ function buildDesktop20Mutators() {
     const openAction = actions.find(item => item && typeof item.click === 'function' && !['Quit', '退出', '結束'].includes(item.label));
     if (openAction) {
         tray.on('double-click', () => {
-            const wins = electron_1.BrowserWindow.getAllWindows();
-            if (wins.length > 0 && wins[0].isMinimized()) {
+            const baseWins = (electron_1.BaseWindow && typeof electron_1.BaseWindow.getAllWindows === 'function') ? electron_1.BaseWindow.getAllWindows() : [];
+            const browserWins = (electron_1.BrowserWindow && typeof electron_1.BrowserWindow.getAllWindows === 'function') ? electron_1.BrowserWindow.getAllWindows() : [];
+            const wins = baseWins.concat(browserWins);
+            if (wins.length > 0 && typeof wins[0].isMinimized === 'function' && wins[0].isMinimized()) {
                 wins[0].restore();
             }
             openAction.click();
@@ -2952,6 +2954,18 @@ function install20(resourcesDir) {
 function restore20(resourcesDir) {
     const asarPath = path.join(resourcesDir, "app.asar");
     const bakPath = path.join(resourcesDir, "app.asar.bak");
+    const asarPatcher = require(path.join(__dirname, 'scripts', 'asar_patcher.js'));
+
+    if (fs.existsSync(asarPath) && !asarPatcher.isAsarLocalizedFast(asarPath, {
+        signatureStart: SIGNATURE_START,
+        signatureEnd: SIGNATURE_END
+    })) {
+        if (fs.existsSync(bakPath)) {
+            try { fs.unlinkSync(bakPath); } catch (e) {}
+        }
+        console.log("[√] 当前 app.asar 已是官方原版，无需覆盖还原。");
+        return true;
+    }
 
     if (!fs.existsSync(bakPath)) {
         console.log("[!] 未找到备份文件 app.asar.bak，可能尚未安装过汉化或备份被删除。");
@@ -3827,13 +3841,13 @@ function injectExtensionJsDir(extDir, prebuiltHanhuaJs) {
         }
 
         // Hook 5: 外层 vscode-webview 壳层 (renderLoading / renderWebviewHtml) 注入 CSP 安全汉化脚本与实时状态同步
-        const renderLoadingRegex = /renderLoading\(([A-Za-z0-9_$]+)(,[^)]*)?\)\{(\s*[A-Za-z0-9_$]+\(\1\);\s*(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*\1\.asWebviewUri\(([A-Za-z0-9_$]+)\.Uri\.joinPath\(this\.context\.extensionUri,"loading_bridge\.js"\)\);)([\s\S]{100,4500}?)(<script src="\$\{\4\}">(?:\\x3c|<)\/script>)/g;
+        const renderLoadingRegex = /renderLoading\(([A-Za-z0-9_$]+)(,[^)]*)?\)\{(\s*[A-Za-z0-9_$]+\(\1\);\s*(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*\1\.asWebviewUri\(([A-Za-z0-9_$]+)\.Uri\.joinPath\(this\.context\.extensionUri,"loading_bridge\.js"\)\);)([\s\S]{100,15000}?)(<script src="\$\{\4\}">(?:\\x3c|<)\/script>)/g;
         content = content.replace(
             renderLoadingRegex,
             'renderLoading($1$2){try{__agTrackWebview($1)}catch(__e){}var __agHu=$1.asWebviewUri($5.Uri.joinPath(this.context.extensionUri,"vscode","ag_agent_hanhua.js"));$3$6<script id="__ag_hanhua_ext_script__" data-ag-state="${__agGetEncodedStateAttr()}" src="${__agHu}">\\x3c/script>$7'
         );
 
-        const renderWebviewHtmlRegex = /renderWebviewHtml\(([A-Za-z0-9_$]+),([A-Za-z0-9_$]+),([A-Za-z0-9_$]+),([A-Za-z0-9_$]+)\)\{(\s*[A-Za-z0-9_$]+\(\1\);\s*(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*\1\.asWebviewUri\(([A-Za-z0-9_$]+)\.Uri\.joinPath\(this\.context\.extensionUri,"bridge\.js"\)\))([\s\S]{100,8500}?)(<script src="\$\{\6\}">(?:\\x3c|<)\/script>)/g;
+        const renderWebviewHtmlRegex = /renderWebviewHtml\(([A-Za-z0-9_$]+),([A-Za-z0-9_$]+),([A-Za-z0-9_$]+),([A-Za-z0-9_$]+)\)\{(\s*[A-Za-z0-9_$]+\(\1\);\s*(?:var|let|const)\s+([A-Za-z0-9_$]+)\s*=\s*\1\.asWebviewUri\(([A-Za-z0-9_$]+)\.Uri\.joinPath\(this\.context\.extensionUri,"bridge\.js"\)\))([\s\S]{100,25000}?)(<script src="\$\{\6\}">(?:\\x3c|<)\/script>)/g;
         content = content.replace(
             renderWebviewHtmlRegex,
             'renderWebviewHtml($1,$2,$3,$4){try{__agTrackWebview($1)}catch(__e){}var __agHu=$1.asWebviewUri($7.Uri.joinPath(this.context.extensionUri,"vscode","ag_agent_hanhua.js"));$5$8<script id="__ag_hanhua_ext_script__" data-ag-state="${__agGetEncodedStateAttr()}" src="${__agHu}">\\x3c/script>$9'
@@ -4207,57 +4221,10 @@ function restore10(installDir) {
 // ==========================================
 // 代理模块管理 (仅限 Windows 平台 Desktop/IDE 主程序目录注入)
 // ==========================================
-function injectProxyIfNeeded(installDir) {
-    if (process.platform !== 'win32') return;
-    if (!hasAntigravityResources(installDir)) return;
-    const proxyConfigDir = path.join(__dirname, 'proxy_config');
-    if (!fs.existsSync(proxyConfigDir)) return;
-
-    let files = [];
-    try {
-        files = fs.readdirSync(proxyConfigDir).filter(f => {
-            const fullPath = path.join(proxyConfigDir, f);
-            return fs.statSync(fullPath).isFile();
-        });
-    } catch (e) {
-        return;
-    }
-
-    if (files.length === 0) return;
-
-    console.log(`\n[代理] 检测到 proxy_config 配置目录，正在注入代理模块...`);
-    const injectedFiles = [];
-    for (const file of files) {
-        const src = path.join(proxyConfigDir, file);
-        const dest = path.join(installDir, file);
-        try {
-            fs.copyFileSync(src, dest);
-            injectedFiles.push(file);
-        } catch (e) {
-            console.warn(`[代理警告] 注入文件 ${file} 失败: ${e.message}`);
-        }
-    }
-
-    if (injectedFiles.length > 0) {
-        console.log(`[代理] 代理模块注入成功: ${injectedFiles.join(', ')}`);
-    }
-}
-
 function restoreProxyIfNeeded(installDir) {
     if (process.platform !== 'win32') return;
     if (!hasAntigravityResources(installDir)) return;
     const proxyFiles = ['version.dll', 'dbghelp.dll', 'config.json'];
-    const proxyConfigDir = path.join(__dirname, 'proxy_config');
-    if (fs.existsSync(proxyConfigDir)) {
-        try {
-            const files = fs.readdirSync(proxyConfigDir);
-            for (const f of files) {
-                if (!proxyFiles.includes(f)) proxyFiles.push(f);
-            }
-        } catch (e) {
-            // ignore
-        }
-    }
 
     const removedFiles = [];
     for (const file of proxyFiles) {
@@ -4359,6 +4326,88 @@ function runThemePatchCli(subArgs, options = {}) {
     );
 }
 
+function buildThemeOverrideDict(options = {}) {
+    const useTw = typeof options.useTw === 'boolean' ? options.useTw : USE_TW;
+    const brandTitle = options.brandTitle || BRAND_TITLE_MODE;
+
+    const coreDictPath = path.join(__dirname, 'theme_patch', 'core', 'i18n.json');
+    let coreDict = {};
+    if (fs.existsSync(coreDictPath)) {
+        try {
+            coreDict = JSON.parse(fs.readFileSync(coreDictPath, 'utf8'));
+        } catch (e) {}
+    }
+
+    const dictsFolder = useTw ? 'dicts_tw' : 'dicts';
+    const dictsDir = path.join(__dirname, dictsFolder);
+    const override = {};
+
+    if (fs.existsSync(dictsDir)) {
+        const files = fs.readdirSync(dictsDir).filter(f => f.endsWith('.json')).sort();
+        for (const file of files) {
+            try {
+                const data = JSON.parse(fs.readFileSync(path.join(dictsDir, file), 'utf8'));
+                for (const [rawK, rawV] of Object.entries(data)) {
+                    if (rawK.startsWith('_') || typeof rawV !== 'string') continue;
+                    const k = rawK.trim();
+                    const v = rawV.trim();
+                    if (!k || !v || k === v) continue;
+
+                    if (k === 'Antigravity') {
+                        if (brandTitle === 'english') continue;
+                        if (brandTitle === 'hidden') {
+                            override[k] = '';
+                            continue;
+                        }
+                        override[k] = v;
+                        continue;
+                    }
+
+                    if (!useTw && Object.prototype.hasOwnProperty.call(coreDict, k)) continue;
+                    if (!/[A-Za-z]{2,}/.test(k) || /[\u4e00-\u9fff]/.test(k) || !/[\u4e00-\u9fff]/.test(v)) continue;
+                    if (/^[a-z][a-z0-9_./:-]*$/.test(k)) continue;
+                    if (/[{}]|\$\/|=>|<\/?[a-z]+/i.test(k)) continue;
+
+                    override[k] = v;
+                }
+            } catch (e) {}
+        }
+    }
+
+    return {
+        _comment: '由 localization_engine.js 自动合并生成的补充词库（不覆盖 core/i18n.json 原生词条）；支持直接增改，保存后 2.5 秒热生效。',
+        exact: override
+    };
+}
+
+function syncThemePatchOverrideDict(options = {}) {
+    const payload = buildThemeOverrideDict(options);
+    const jsonText = JSON.stringify(payload, null, 2) + '\n';
+    const count = Object.keys(payload.exact || {}).length;
+
+    const repoOverridePath = path.join(__dirname, 'theme_patch', 'user', 'i18n.override.json');
+    try {
+        fs.mkdirSync(path.dirname(repoOverridePath), { recursive: true });
+        fs.writeFileSync(repoOverridePath, jsonText, 'utf8');
+    } catch (e) {
+        console.warn(`[主题警告] 写入仓库补充词库失败: ${e.message}`);
+    }
+
+    const { home } = resolveThemeUserHome();
+    const deployedUserDir = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user');
+    if (fs.existsSync(deployedUserDir)) {
+        const deployedOverridePath = path.join(deployedUserDir, 'i18n.override.json');
+        try {
+            fs.writeFileSync(deployedOverridePath, jsonText, 'utf8');
+        } catch (e) {
+            console.warn(`[主题警告] 写入部署目录补充词库失败: ${e.message}`);
+        }
+    }
+
+    console.log(`[主题] 已同步补充汉化词库至 user/i18n.override.json (${count} 条，${(options.useTw ?? USE_TW) ? '繁体中文' : '简体中文'})。`);
+    return { count, repoOverridePath };
+}
+
 function installThemePatchIfNeeded(options = {}) {
     const themePatchDir = path.join(__dirname, 'theme_patch');
     if (!fs.existsSync(path.join(themePatchDir, 'install.mjs'))) return;
@@ -4374,26 +4423,37 @@ function installThemePatchIfNeeded(options = {}) {
         return;
     }
 
-    // 默认关闭船板自身的 i18n 模块，交由 localization_engine.js 统一接管（确保简/繁与免重启切换零冲突）
-    if (!options.keepThemeI18n) {
-        try {
-            const deployedUserCfgPath = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user', 'config.json');
-            if (fs.existsSync(deployedUserCfgPath)) {
-                const cfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
-                if (!cfg.modules || typeof cfg.modules !== 'object') cfg.modules = {};
-                if (cfg.modules.i18n !== false) {
-                    cfg.modules.i18n = false;
-                    fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-                    const deployedDaemon = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'core', 'daemon.mjs');
-                    if (fs.existsSync(deployedDaemon)) {
-                        child_process.spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', deployedDaemon, '--once'], {
-                            stdio: 'ignore',
-                            windowsHide: true
-                        });
-                    }
-                }
+    const enableThemeI18n = typeof options.enableThemeI18n === 'boolean'
+        ? options.enableThemeI18n
+        : Boolean(options.keepThemeI18n);
+
+    try {
+        const deployedUserCfgPath = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user', 'config.json');
+        let needHotReload = false;
+        if (fs.existsSync(deployedUserCfgPath)) {
+            const cfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
+            if (!cfg.modules || typeof cfg.modules !== 'object') cfg.modules = {};
+            if (cfg.modules.i18n !== enableThemeI18n) {
+                cfg.modules.i18n = enableThemeI18n;
+                fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+                needHotReload = true;
             }
-        } catch (e) {}
+        }
+        if (enableThemeI18n) {
+            syncThemePatchOverrideDict(options);
+            needHotReload = true;
+        }
+        if (needHotReload) {
+            const deployedDaemon = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'core', 'daemon.mjs');
+            if (fs.existsSync(deployedDaemon)) {
+                child_process.spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', deployedDaemon, '--once'], {
+                    stdio: 'ignore',
+                    windowsHide: true
+                });
+            }
+        }
+    } catch (e) {
+        console.warn(`[主题警告] 同步 CDP 汉化配置异常: ${e.message}`);
     }
 
     // Windows 非管理员权限下 schtasks ONLOGON 会被拒绝而回退为当前进程树子进程；
@@ -4499,7 +4559,11 @@ function main() {
     for (const [flag, subcmd] of Object.entries(themeSubcmdMap)) {
         if (args.includes(flag)) {
             if (subcmd === 'install') {
-                installThemePatchIfNeeded({ keepThemeI18n: args.includes('--theme-i18n') });
+                installThemePatchIfNeeded({
+                    enableThemeI18n: !args.includes('--no-theme-i18n'),
+                    useTw: USE_TW,
+                    brandTitle: BRAND_TITLE_MODE
+                });
                 return;
             }
             if (subcmd === 'uninstall') {
@@ -4511,6 +4575,73 @@ function main() {
             if (res.status !== 0) process.exit(res.status || 1);
             return;
         }
+    }
+
+    if (args.includes('--cdp-only') && !args.includes('--asar') && !huifu) {
+        console.log("====== 正在切换并部署 Antigravity 纯 CDP 零修改汉化模式 (方案 A) ======");
+        try {
+            autoHeal.removeLaunchers();
+            autoHeal.uninstallGuard();
+        } catch (e) {}
+
+        let detectedTargets = [];
+        try {
+            if (manualDir) {
+                detectedTargets = [detectInstallationDir(manualDir)];
+            } else {
+                detectedTargets = detectInstallations();
+            }
+        } catch (e) {}
+
+        const asarPatcher = require(path.join(__dirname, 'scripts', 'asar_patcher.js'));
+        for (const installDir of detectedTargets) {
+            restoreProxyIfNeeded(installDir);
+
+            let resourcesDir = "";
+            if (fs.existsSync(path.join(installDir, "resources", "app.asar"))) {
+                resourcesDir = path.join(installDir, "resources");
+            } else if (fs.existsSync(path.join(installDir, "Contents", "Resources", "app.asar"))) {
+                resourcesDir = path.join(installDir, "Contents", "Resources");
+            } else if (fs.existsSync(path.join(installDir, "app.asar"))) {
+                resourcesDir = installDir;
+            }
+
+            if (resourcesDir) {
+                const asarPath = path.join(resourcesDir, "app.asar");
+                const bakPath = path.join(resourcesDir, "app.asar.bak");
+                const isAsarLocalized = asarPatcher.isAsarLocalizedFast(asarPath, {
+                    signatureStart: SIGNATURE_START,
+                    signatureEnd: SIGNATURE_END
+                });
+                if (isAsarLocalized || fs.existsSync(bakPath)) {
+                    if (!autoHeal.isClientOrUpdaterRunning([installDir])) {
+                        restore20(resourcesDir);
+                    } else if (isAsarLocalized) {
+                        console.log(`[提示] ${path.basename(installDir)} 当前正在运行且带旧版 ASAR 补丁，将在完全退出后通过 --huifu 还原，已先启用纯 CDP 汉化。`);
+                    }
+                }
+            } else if (hasAntigravityResources(installDir)) {
+                const appDir = getAppDir(installDir);
+                const wbExists = getOldTargetFiles(appDir).some(f => fs.existsSync(f + ".bak"));
+                const mainBak = fs.existsSync(path.join(appDir, "out", "main.js.bak"));
+                const extBak = fs.existsSync(path.join(appDir, "extensions", "agy", "vscode", "extension.js.bak"));
+                const probe = autoHeal.probeAppTargetStatus(installDir);
+                if (probe.localized || wbExists || mainBak || extBak) {
+                    if (!autoHeal.isClientOrUpdaterRunning([installDir])) {
+                        restore10(installDir);
+                    } else {
+                        console.log(`[提示] ${path.basename(installDir)} 当前正在运行，请退出后运行 --huifu 完成原版文件还原。`);
+                    }
+                }
+            }
+        }
+
+        installThemePatchIfNeeded({
+            enableThemeI18n: true,
+            useTw: USE_TW,
+            brandTitle: BRAND_TITLE_MODE
+        });
+        return;
     }
 
     const hasCreateLauncher = args.includes('--create-launcher');
@@ -4647,9 +4778,6 @@ function main() {
             } else {
                 success = install10(installDir);
             }
-            if (success) {
-                injectProxyIfNeeded(installDir);
-            }
         }
 
         if (!success) {
@@ -4709,7 +4837,11 @@ function main() {
 
         if (shouldDeployThemePatch) {
             try {
-                installThemePatchIfNeeded({ keepThemeI18n: args.includes('--theme-i18n') });
+                installThemePatchIfNeeded({
+                    enableThemeI18n: args.includes('--theme-i18n'),
+                    useTw: USE_TW,
+                    brandTitle: BRAND_TITLE_MODE
+                });
             } catch (e) {
                 console.warn(`[主题警告] 船板主题服务执行异常: ${e.message}`);
             }
@@ -4765,7 +4897,9 @@ module.exports = {
     restoreExtensionTarget,
     discoverExtensionTargets,
     patchExtensionPackageNls,
-    injectExtensionJsDir
+    injectExtensionJsDir,
+    buildThemeOverrideDict,
+    syncThemePatchOverrideDict
 };
 
 if (require.main === module) {

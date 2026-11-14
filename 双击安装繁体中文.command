@@ -12,8 +12,32 @@ for p in "$REAL_HOME"/.nvm/versions/node/*/bin /opt/homebrew/opt/node@*/bin /usr
     [ -d "$p" ] && export PATH="$p:$PATH"
 done
 
-# 檢查管理員權限，若不是 root 則自動透過 sudo 提權並保留環境變數
-if [ "$EUID" -ne 0 ]; then
+# 檢查是否顯式要求 --asar；預設採用純 CDP 無修改方案（無需 root/修改 .app）
+USE_ASAR=false
+HAS_BRAND_ARG=false
+HAS_CUSTOM_INSTALL_DIR=false
+for arg in "$@"; do
+    if [[ "$arg" == "--asar" ]]; then
+        USE_ASAR=true
+    elif [[ "$arg" == --brand-title* ]]; then
+        HAS_BRAND_ARG=true
+    elif [[ "$arg" == --install-dir* ]]; then
+        HAS_CUSTOM_INSTALL_DIR=true
+    fi
+done
+
+# 檢查管理員權限（僅 --asar 模式且目標不可寫入時才需要 sudo）
+NEED_SUDO=false
+if [ "$USE_ASAR" = true ] && [ "$EUID" -ne 0 ]; then
+    for app_res in "/Applications/Antigravity.app/Contents/Resources" "/Applications/Antigravity IDE.app/Contents/Resources"; do
+        if [ -d "$app_res" ] && [ ! -w "$app_res" ]; then
+            NEED_SUDO=true
+            break
+        fi
+    done
+fi
+
+if [ "$NEED_SUDO" = true ]; then
     echo "======================================================"
     echo " 提示：macOS 系統修改應用程式（/Applications）需要管理員權限"
     echo " 請在下方輸入您的電腦開機密碼（輸入時密碼不顯示，直接 Enter）："
@@ -34,18 +58,10 @@ if ! command -v node &> /dev/null; then
     exit 1
 fi
 
-# 檢查是否已透過命令列傳入 --brand-title
-HAS_BRAND_ARG=false
-HAS_CUSTOM_INSTALL_DIR=false
-for arg in "$@"; do
-    if [[ "$arg" == --brand-title* ]]; then
-        HAS_BRAND_ARG=true
-    elif [[ "$arg" == --install-dir* ]]; then
-        HAS_CUSTOM_INSTALL_DIR=true
-    fi
-done
-
 EXTRA_ARGS=(--tw)
+if [ "$USE_ASAR" = false ]; then
+    EXTRA_ARGS+=(--cdp-only)
+fi
 if [ "$HAS_BRAND_ARG" = false ]; then
     BRAND_MODE="english"
     if [ -t 0 ]; then
@@ -65,7 +81,7 @@ if [ "$HAS_BRAND_ARG" = false ]; then
     EXTRA_ARGS+=(--brand-title "$BRAND_MODE")
 fi
 
-if [ "$HAS_CUSTOM_INSTALL_DIR" = false ] && [ -d "/Applications/Antigravity.app" ]; then
+if [ "$USE_ASAR" = true ] && [ "$HAS_CUSTOM_INSTALL_DIR" = false ] && [ -d "/Applications/Antigravity.app" ]; then
     EXTRA_ARGS+=(--install-dir "/Applications/Antigravity.app")
 fi
 
