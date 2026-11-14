@@ -1,5 +1,11 @@
 @echo off
 chcp 65001 >nul
+if exist "%APPDATA%\fnm\aliases\default\node.exe" set "PATH=%APPDATA%\fnm\aliases\default;%PATH%"
+if exist "%LOCALAPPDATA%\fnm\aliases\default\node.exe" set "PATH=%LOCALAPPDATA%\fnm\aliases\default;%PATH%"
+if exist "%USERPROFILE%\.volta\bin\node.exe" set "PATH=%USERPROFILE%\.volta\bin;%PATH%"
+if defined NVM_SYMLINK if exist "%NVM_SYMLINK%\node.exe" set "PATH=%NVM_SYMLINK%;%PATH%"
+if exist "%ProgramFiles%\nodejs\node.exe" set "PATH=%ProgramFiles%\nodejs;%PATH%"
+if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "PATH=%LOCALAPPDATA%\Programs\nodejs;%PATH%"
 title Antigravity 中文汉化安装工具（纯 CDP 零修改模式）
 
 echo.

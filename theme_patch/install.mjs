@@ -674,7 +674,206 @@ function stopRunningDaemonProcesses() {
   return stopped;
 }
 
-function registerSystemService(targetDir, wrapperDaemon) {
+function isNode22Plus(binPath) {
+  if (!binPath || !fs.existsSync(binPath)) return false;
+  try {
+    const res = spawnSync(binPath, ['-p', 'parseInt(process.versions.node.split(".")[0],10)>=22?"1":"0"'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 2500
+    });
+    return res.status === 0 && String(res.stdout || '').trim() === '1';
+  } catch {
+    return false;
+  }
+}
+
+function resolveStableNodeBinary() {
+  const home = os.homedir();
+  let realExec = process.execPath;
+  try {
+    realExec = fs.realpathSync.native(process.execPath);
+  } catch {}
+
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const candidates = [
+      path.join(appData, 'fnm', 'aliases', 'default', 'node.exe'),
+      path.join(localAppData, 'fnm', 'aliases', 'default', 'node.exe'),
+      path.join(home, '.volta', 'bin', 'node.exe'),
+      process.env.NVM_SYMLINK ? path.join(process.env.NVM_SYMLINK, 'node.exe') : ''
+    ].filter(Boolean);
+    for (const c of candidates) {
+      if (isNode22Plus(c)) return c;
+    }
+    return realExec;
+  }
+
+  const candidates = [
+    path.join(home, '.local', 'share', 'fnm', 'aliases', 'default', 'bin', 'node'),
+    path.join(home, 'Library', 'Application Support', 'fnm', 'aliases', 'default', 'bin', 'node'),
+    path.join(home, '.fnm', 'current', 'bin', 'node'),
+    path.join(home, '.volta', 'bin', 'node'),
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node'
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) {
+      try {
+        if (fs.realpathSync.native(c) === realExec || isNode22Plus(c)) {
+          return c;
+        }
+      } catch {}
+    }
+  }
+  return realExec;
+}
+
+function buildMacServicePathEnv(stableNode) {
+  const home = os.homedir();
+  const dirs = [
+    stableNode ? path.dirname(stableNode) : '',
+    path.join(home, '.local', 'share', 'fnm', 'aliases', 'default', 'bin'),
+    path.join(home, 'Library', 'Application Support', 'fnm', 'aliases', 'default', 'bin'),
+    path.join(home, '.fnm', 'current', 'bin'),
+    path.join(home, '.volta', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/Library/Frameworks/Python.framework/Versions/Current/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin'
+  ].filter(Boolean);
+  return Array.from(new Set(dirs)).join(':');
+}
+
+function writeDaemonWrapperScripts(targetCore, scriptsDir) {
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  const wrapperDaemon = path.join(scriptsDir, 'antigravity-font-daemon.mjs');
+  const keepaliveScript = path.join(scriptsDir, 'antigravity-daemon-keepalive.mjs');
+  const realDaemon = path.join(targetCore, 'daemon.mjs');
+  const realDaemonUrl = pathToFileURL(realDaemon).href;
+
+  const wrapperCode = `#!/usr/bin/env node
+// Auto-generated wrapper -> ${realDaemon}
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+await import(${JSON.stringify(realDaemonUrl)});
+
+if (!process.argv.includes('--once')) {
+  const monitorFile = path.join(os.homedir(), '.gemini', 'antigravity', 'token-monitor', 'monitor_server.mjs');
+  if (fs.existsSync(monitorFile)) {
+    try {
+      const { startTokenMonitorServer } = await import(pathToFileURL(monitorFile).href);
+      await startTokenMonitorServer({ host: '127.0.0.1', port: 18923 });
+    } catch (e) {
+      console.warn('[Token Monitor] 随守护启动失败:', e?.message || e);
+    }
+  }
+}
+`;
+  fs.writeFileSync(wrapperDaemon, wrapperCode, { encoding: 'utf8', mode: 0o755 });
+
+  const keepaliveCode = `#!/usr/bin/env node
+// Auto-generated idempotent keepalive launcher -> ${wrapperDaemon}
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const wrapperDaemon = path.join(path.dirname(__filename), 'antigravity-font-daemon.mjs');
+const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
+const lockFile = path.join(os.tmpdir(), 'ag-theme-keepalive.lock');
+const forceRestart = process.argv.includes('--restart');
+
+function isAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+  } catch (e) {
+    if (!e || e.code !== 'EPERM') return false;
+  }
+  if (process.platform === 'win32') {
+    try {
+      const r = spawnSync('tasklist', ['/FI', 'PID eq ' + pid, '/FO', 'CSV', '/NH'], {
+        windowsHide: true,
+        encoding: 'utf8',
+        timeout: 1500
+      });
+      if (r.status === 0 && !String(r.stdout || '').toLowerCase().includes('node.exe')) {
+        return false;
+      }
+    } catch {}
+  }
+  return true;
+}
+
+function tryAcquireLock() {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const fd = fs.openSync(lockFile, 'wx');
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() }), 'utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+      return true;
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') return false;
+      try {
+        const st = fs.statSync(lockFile);
+        if (Date.now() - st.mtimeMs < 15000) return false;
+        fs.unlinkSync(lockFile);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+if (tryAcquireLock()) {
+  try {
+    let oldPid = 0;
+    try {
+      if (fs.existsSync(pidFile)) {
+        oldPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10) || 0;
+      }
+    } catch {}
+
+    const alive = isAlive(oldPid);
+    if (!alive || forceRestart) {
+      if (alive && forceRestart) {
+        try { process.kill(oldPid, 'SIGTERM'); } catch {}
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+      }
+      if (fs.existsSync(wrapperDaemon)) {
+        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', wrapperDaemon], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        child.unref();
+      }
+    }
+  } finally {
+    try { fs.unlinkSync(lockFile); } catch {}
+  }
+}
+`;
+  fs.writeFileSync(keepaliveScript, keepaliveCode, { encoding: 'utf8', mode: 0o755 });
+
+  return { wrapperDaemon, keepaliveScript, realDaemon };
+}
+
+function registerSystemService(targetDir, wrapperDaemon, keepaliveScript, stableNode = resolveStableNodeBinary()) {
   const home = os.homedir();
   if (process.platform === 'darwin') {
     const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents');
@@ -683,6 +882,7 @@ function registerSystemService(targetDir, wrapperDaemon) {
     const themePlist = path.join(launchAgentsDir, 'com.antigravity.theme.plist');
     const activePlist = fs.existsSync(existingCustomFontPlist) ? existingCustomFontPlist : themePlist;
     const label = path.basename(activePlist, '.plist');
+    const macPathEnv = buildMacServicePathEnv(stableNode);
 
     const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -692,19 +892,21 @@ function registerSystemService(targetDir, wrapperDaemon) {
     <string>${label}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${process.execPath}</string>
+        <string>${stableNode}</string>
         <string>--disable-warning=ExperimentalWarning</string>
         <string>${wrapperDaemon}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/Library/Frameworks/Python.framework/Versions/Current/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>${macPathEnv}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
     <key>StandardOutPath</key>
     <string>/tmp/antigravity-font-daemon.log</string>
     <key>StandardErrorPath</key>
@@ -716,10 +918,9 @@ function registerSystemService(targetDir, wrapperDaemon) {
     try {
       const uid = process.getuid ? process.getuid() : 501;
       execSync(`launchctl bootout gui/${uid}/${label} 2>/dev/null || true`);
-      execSync(`launchctl bootstrap gui/${uid} "${activePlist}" 2>/dev/null || launchctl load -w "${activePlist}" 2>/dev/null || true`);
-      execSync(`launchctl kickstart -k gui/${uid}/${label} 2>/dev/null || true`);
+      execSync(`launchctl bootstrap gui/${uid} "${activePlist}" 2>/dev/null || { launchctl load -w "${activePlist}" 2>/dev/null && launchctl kickstart -k gui/${uid}/${label} 2>/dev/null; } || true`);
     } catch {}
-    return { platform: 'darwin', serviceFile: activePlist, label, runningNow: true };
+    return { platform: 'darwin', serviceFile: activePlist, label, nodeBin: stableNode, runningNow: true };
   }
 
   if (process.platform === 'linux') {
@@ -731,7 +932,7 @@ Description=Chuanban Antigravity Theme & Live Metrics Daemon
 After=default.target
 
 [Service]
-ExecStart="${process.execPath}" --disable-warning=ExperimentalWarning "${wrapperDaemon}"
+ExecStart="${stableNode}" --disable-warning=ExperimentalWarning "${wrapperDaemon}"
 Restart=always
 RestartSec=3
 
@@ -742,7 +943,7 @@ WantedBy=default.target
     try {
       execSync('systemctl --user daemon-reload && systemctl --user enable --now antigravity-theme.service 2>/dev/null || true');
     } catch {}
-    return { platform: 'linux', serviceFile, runningNow: true };
+    return { platform: 'linux', serviceFile, nodeBin: stableNode, runningNow: true };
   }
 
   if (process.platform === 'win32') {
@@ -751,16 +952,55 @@ WantedBy=default.target
     const startupDir = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
     const vbsFile = path.join(startupDir, 'AntigravityThemeDaemon.vbs');
     const localVbsFile = path.join(targetDir, 'AntigravityThemeDaemon.vbs');
-    const cmd = `""${process.execPath}"" --disable-warning=ExperimentalWarning ""${wrapperDaemon}""`;
+    const restartVbsFile = path.join(targetDir, 'AntigravityThemeRestart.vbs');
+    const vbsEsc = (s) => String(s).replace(/"/g, '""');
+    const keepaliveTarget = keepaliveScript || wrapperDaemon;
+    const cmd = `""${vbsEsc(stableNode)}"" --disable-warning=ExperimentalWarning ""${vbsEsc(keepaliveTarget)}""`;
+    const restartCmd = `""${vbsEsc(stableNode)}"" --disable-warning=ExperimentalWarning ""${vbsEsc(keepaliveTarget)}"" --restart`;
     const vbsContent = `\uFEFFSet WshShell = CreateObject("WScript.Shell")\r\nWshShell.Run "${cmd}", 0, False\r\n`;
+    const restartVbsContent = `\uFEFFSet WshShell = CreateObject("WScript.Shell")\r\nWshShell.Run "${restartCmd}", 0, False\r\n`;
     try {
-      // 使用 UTF-16LE (带 BOM) 写入本地启动跳板 VBS，彻底兼容 Windows 中文用户名路径 (wscript.exe 原生支持 UTF-16LE)
+      // 使用 UTF-16LE (带 BOM) 写入本地启动/重启跳板 VBS，彻底兼容 Windows 中文用户名路径
       fs.writeFileSync(localVbsFile, vbsContent, 'utf16le');
+      fs.writeFileSync(restartVbsFile, restartVbsContent, 'utf16le');
     } catch {}
 
-    // 单一权威自启策略：优先使用 Windows 计划任务 (schtasks ONLOGON)，由系统 Schedule 服务拉起、
-    // 脱离沙盒 Win32 Job Object；注册成功后主动清理旧版遗留的 HKCU\...\Run 与 Startup\*.vbs，避免开机三路并发争抢！
-    let autostartMethod = 'none';
+    // 清理旧版 Startup VBS 与需要管理员权限的 ONLOGON 任务残留
+    try {
+      if (fs.existsSync(vbsFile)) fs.unlinkSync(vbsFile);
+    } catch {}
+    try {
+      spawnSync('schtasks', ['/Delete', '/TN', 'AntigravityThemeDaemon', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true
+      });
+    } catch {}
+
+    // 非管理员兼容双路互补注册：
+    // 1) HKCU\...\Run 保证用户登录桌面时立即拉起；
+    // 2) /SC MINUTE /MO 5 (AntigravityThemeKeepAlive) 运行幂等 keepalive 脚本：由 Schedule 服务脱离沙盒 Job Object，
+    //    并在进程意外退出时 5 分钟内自动自愈，守护存活时零打扰。
+    let regRunInstalled = false;
+    try {
+      const regRes = spawnSync(
+        'reg',
+        [
+          'add',
+          'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
+          '/v',
+          'AntigravityThemeDaemon',
+          '/t',
+          'REG_SZ',
+          '/d',
+          `wscript.exe //B //NoLogo "${localVbsFile}"`,
+          '/f'
+        ],
+        { stdio: 'ignore', windowsHide: true }
+      );
+      regRunInstalled = regRes.status === 0;
+    } catch {}
+
+    let keepaliveTaskCreated = false;
     let scheduledTaskStarted = false;
     try {
       const createRes = spawnSync(
@@ -768,9 +1008,11 @@ WantedBy=default.target
         [
           '/Create',
           '/TN',
-          'AntigravityThemeDaemon',
+          'AntigravityThemeKeepAlive',
           '/SC',
-          'ONLOGON',
+          'MINUTE',
+          '/MO',
+          '5',
           '/TR',
           `wscript.exe //B //NoLogo "${localVbsFile}"`,
           '/F'
@@ -778,20 +1020,8 @@ WantedBy=default.target
         { stdio: 'ignore', windowsHide: true }
       );
       if (createRes.status === 0) {
-        autostartMethod = 'schtasks';
-        // 清理旧版多重自启残留
-        try {
-          if (fs.existsSync(vbsFile)) fs.unlinkSync(vbsFile);
-        } catch {}
-        try {
-          spawnSync(
-            'reg',
-            ['delete', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'AntigravityThemeDaemon', '/f'],
-            { stdio: 'ignore', windowsHide: true }
-          );
-        } catch {}
-
-        const runRes = spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeDaemon'], {
+        keepaliveTaskCreated = true;
+        const runRes = spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeKeepAlive'], {
           stdio: 'ignore',
           windowsHide: true
         });
@@ -799,32 +1029,29 @@ WantedBy=default.target
       }
     } catch {}
 
-    // 仅当组策略等禁用了 schtasks 时，按 HKCU\Run -> Startup 目录顺序单路降级自启
-    if (autostartMethod === 'none') {
-      try {
-        const regRes = spawnSync(
-          'reg',
-          [
-            'add',
-            'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
-            '/v',
-            'AntigravityThemeDaemon',
-            '/t',
-            'REG_SZ',
-            '/d',
-            `wscript.exe //B //NoLogo "${localVbsFile}"`,
-            '/f'
-          ],
-          { stdio: 'ignore', windowsHide: true }
-        );
-        if (regRes.status === 0) {
-          autostartMethod = 'registry-run';
-          try {
-            if (fs.existsSync(vbsFile)) fs.unlinkSync(vbsFile);
-          } catch {}
-        }
-      } catch {}
+    // 轮询等待最多 1500ms 确认 Schedule 服务已成功拉起守护进程
+    let daemonPidAlive = false;
+    const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
+    if (scheduledTaskStarted) {
+      const waitArr = new Int32Array(new SharedArrayBuffer(4));
+      for (let i = 0; i < 10; i++) {
+        Atomics.wait(waitArr, 0, 0, 150);
+        try {
+          if (fs.existsSync(pidFile)) {
+            const p = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+            if (isConfirmedDaemonPid(p)) {
+              daemonPidAlive = true;
+              break;
+            }
+          }
+        } catch {}
+      }
     }
+
+    let autostartMethod = keepaliveTaskCreated
+      ? (regRunInstalled ? 'schtasks-keepalive+registry-run' : 'schtasks-keepalive')
+      : (regRunInstalled ? 'registry-run' : 'none');
+
     if (autostartMethod === 'none') {
       try {
         fs.mkdirSync(startupDir, { recursive: true });
@@ -833,17 +1060,18 @@ WantedBy=default.target
       } catch {}
     }
 
-    // 若计划任务未能即时拉起后台进程，回退到 detached spawn 直接拉起
+    // 若计划任务未能及时拉起后台进程，回退到 detached spawn 直接拉起
     let spawnedPid = null;
-    if (!scheduledTaskStarted) {
+    if (!daemonPidAlive) {
       try {
-        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', wrapperDaemon], {
+        const child = spawn(stableNode, ['--disable-warning=ExperimentalWarning', wrapperDaemon], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true
         });
         child.unref();
         spawnedPid = child.pid || null;
+        daemonPidAlive = Boolean(spawnedPid);
       } catch {}
     }
     return {
@@ -851,10 +1079,12 @@ WantedBy=default.target
       autostartMethod,
       serviceFile: autostartMethod === 'startup-vbs' ? vbsFile : localVbsFile,
       localVbsFile,
-      scheduledTask: autostartMethod === 'schtasks' ? 'AntigravityThemeDaemon' : null,
+      restartVbsFile,
+      nodeBin: stableNode,
+      scheduledTask: keepaliveTaskCreated ? 'AntigravityThemeKeepAlive' : null,
       scheduledTaskStarted,
       spawnedPid,
-      runningNow: Boolean(scheduledTaskStarted || spawnedPid)
+      runningNow: Boolean(daemonPidAlive)
     };
   }
 
@@ -874,7 +1104,13 @@ async function runInstall() {
     process.exit(1);
   }
 
-  buildManifest(__dirname);
+  const integrity = verifyCoreIntegrity(__dirname);
+  if (!integrity.ok && !fs.existsSync(path.join(__dirname, 'core', 'manifest.json'))) {
+    buildManifest(__dirname);
+  } else if (!integrity.ok) {
+    console.error('[ERROR] Core integrity check failed:', JSON.stringify(integrity));
+    process.exit(1);
+  }
 
   const srcCore = path.join(__dirname, 'core');
   const srcUser = path.join(__dirname, 'user');
@@ -964,23 +1200,16 @@ async function runInstall() {
   // 自动检查并修补 ~/.antigravity/argv.json (remote-debugging-port)
   const argvStatus = ensureArgvRemoteDebugging(currentCfg.channel);
 
-  // 创建兼容包装脚本 ~/.gemini/antigravity/scripts/antigravity-font-daemon.mjs（使用 pathToFileURL 兼容 Windows C:\ 路径）
+  // 创建兼容包装脚本与幂等保活脚本（使用 pathToFileURL 兼容 Windows C:\ 路径，并动态探测 Token Monitor）
   const scriptsDir = path.join(os.homedir(), '.gemini', 'antigravity', 'scripts');
-  fs.mkdirSync(scriptsDir, { recursive: true });
-  const wrapperDaemon = path.join(scriptsDir, 'antigravity-font-daemon.mjs');
-  const realDaemon = path.join(targetCore, 'daemon.mjs');
-  const realDaemonUrl = pathToFileURL(realDaemon).href;
-  fs.writeFileSync(
-    wrapperDaemon,
-    `#!/usr/bin/env node\n// Auto-generated wrapper -> ${realDaemon}\nawait import(${JSON.stringify(realDaemonUrl)});\n`,
-    { encoding: 'utf8', mode: 0o755 }
-  );
+  const stableNode = resolveStableNodeBinary();
+  const { wrapperDaemon, keepaliveScript, realDaemon } = writeDaemonWrapperScripts(targetCore, scriptsDir);
 
   // 注册/更新跨平台自启服务
-  const serviceInfo = registerSystemService(targetDir, wrapperDaemon);
+  const serviceInfo = registerSystemService(targetDir, wrapperDaemon, keepaliveScript, stableNode);
 
   // 立即执行一次 --once 同步注入
-  spawnSync(process.execPath, ['--disable-warning=ExperimentalWarning', realDaemon, '--once'], {
+  spawnSync(stableNode, ['--disable-warning=ExperimentalWarning', realDaemon, '--once'], {
     stdio: 'inherit'
   });
 
@@ -1072,16 +1301,39 @@ async function runRollback() {
   } else if (process.platform === 'win32') {
     stopRunningDaemonProcesses();
     let restartedViaTask = false;
-    try {
-      const r = spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeDaemon'], {
-        stdio: 'ignore',
-        windowsHide: true
-      });
-      restartedViaTask = r.status === 0;
-    } catch {}
+    const restartVbs = path.join(targetDir, 'AntigravityThemeRestart.vbs');
+    const localVbs = path.join(targetDir, 'AntigravityThemeDaemon.vbs');
+    if (fs.existsSync(restartVbs)) {
+      try {
+        const r = spawnSync('wscript.exe', ['//B', '//NoLogo', restartVbs], {
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        restartedViaTask = r.status === 0;
+      } catch {}
+    }
     if (!restartedViaTask) {
       try {
-        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', fs.existsSync(wrapperDaemon) ? wrapperDaemon : realDaemon], {
+        const r = spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeKeepAlive'], {
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        restartedViaTask = r.status === 0;
+      } catch {}
+    }
+    if (!restartedViaTask && fs.existsSync(localVbs)) {
+      try {
+        const r = spawnSync('wscript.exe', ['//B', '//NoLogo', localVbs], {
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        restartedViaTask = r.status === 0;
+      } catch {}
+    }
+    if (!restartedViaTask) {
+      try {
+        const stableNode = resolveStableNodeBinary();
+        const child = spawn(stableNode, ['--disable-warning=ExperimentalWarning', fs.existsSync(wrapperDaemon) ? wrapperDaemon : realDaemon], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true
@@ -1203,12 +1455,16 @@ async function runUninstall() {
     const appData = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
     const vbsFile = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'AntigravityThemeDaemon.vbs');
     const localVbs = path.join(targetDir, 'AntigravityThemeDaemon.vbs');
-    try {
-      spawnSync('schtasks', ['/Delete', '/TN', 'AntigravityThemeDaemon', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true
-      });
-    } catch {}
+    const restartVbs = path.join(targetDir, 'AntigravityThemeRestart.vbs');
+    const keepaliveScript = path.join(home, '.gemini', 'antigravity', 'scripts', 'antigravity-daemon-keepalive.mjs');
+    for (const taskName of ['AntigravityThemeKeepAlive', 'AntigravityThemeDaemon']) {
+      try {
+        spawnSync('schtasks', ['/Delete', '/TN', taskName, '/F'], {
+          stdio: 'ignore',
+          windowsHide: true
+        });
+      } catch {}
+    }
     try {
       spawnSync('reg', ['delete', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'AntigravityThemeDaemon', '/f'], {
         stdio: 'ignore',
@@ -1218,6 +1474,8 @@ async function runUninstall() {
     try {
       if (fs.existsSync(vbsFile)) fs.unlinkSync(vbsFile);
       if (fs.existsSync(localVbs)) fs.unlinkSync(localVbs);
+      if (fs.existsSync(restartVbs)) fs.unlinkSync(restartVbs);
+      if (fs.existsSync(keepaliveScript)) fs.unlinkSync(keepaliveScript);
     } catch {}
   }
 

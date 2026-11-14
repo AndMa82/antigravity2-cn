@@ -8,7 +8,7 @@ export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/opt/local/bin:
 for p in "$REAL_HOME/.volta/bin" "$REAL_HOME/.asdf/shims" "$REAL_HOME/.local/share/mise/shims" "$REAL_HOME/.local/bin" "$REAL_HOME/.fnm/current/bin" "$REAL_HOME/.local/share/fnm/aliases/default/bin" "$REAL_HOME/Library/Application Support/fnm/aliases/default/bin"; do
     [ -d "$p" ] && export PATH="$p:$PATH"
 done
-for p in "$REAL_HOME"/.nvm/versions/node/*/bin /opt/homebrew/opt/node@*/bin /usr/local/opt/node@*/bin; do
+for p in "$REAL_HOME"/.nvm/versions/node/*/bin "$REAL_HOME"/.local/share/fnm/node-versions/*/installation/bin "$REAL_HOME/Library/Application Support/fnm/node-versions"/*/installation/bin /opt/homebrew/opt/node@*/bin /usr/local/opt/node@*/bin; do
     [ -d "$p" ] && export PATH="$p:$PATH"
 done
 

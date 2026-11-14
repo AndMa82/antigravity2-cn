@@ -65,6 +65,7 @@ function getStatePaths() {
         guardLogPath: path.join(stateDir, "guard.log"),
         guardPidPath: path.join(stateDir, "guard.pid"),
         watchSnapshotPath: path.join(stateDir, "watch_snapshot.json"),
+        bootstrapScriptPath: path.join(stateDir, "bootstrap_heal.js"),
         plistPath: process.env.AG_PLIST_PATH_OVERRIDE
             ? path.resolve(process.env.AG_PLIST_PATH_OVERRIDE)
             : path.join(home, "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`),
@@ -191,9 +192,28 @@ function withPatchLock(holder, fn) {
 function resolveJsRunner(candidateInstallations = []) {
     const { home } = resolveRealUserAndHome();
 
-    // 若当前并非在 Electron 内运行，当前 process.execPath 即原生 Node
+    // 若当前并非在 Electron 内运行，当前 process.execPath 即原生 Node；
+    // 先解析 symlink/junction 消除 Windows fnm_multishells 临时路径失效问题
     if (!process.versions.electron && fs.existsSync(process.execPath)) {
-        return { bin: process.execPath, env: {}, isElectronFallback: false };
+        let realBin = process.execPath;
+        try {
+            realBin = fs.realpathSync.native(process.execPath);
+        } catch (_) {}
+        let chosenBin = realBin;
+        if (process.platform === "win32" && /fnm_multishells/i.test(process.execPath)) {
+            const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
+            const localApp = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+            for (const c of [
+                path.join(appData, "fnm", "aliases", "default", "node.exe"),
+                path.join(localApp, "fnm", "aliases", "default", "node.exe")
+            ]) {
+                if (fs.existsSync(c)) {
+                    chosenBin = c;
+                    break;
+                }
+            }
+        }
+        return { bin: chosenBin, env: {}, isElectronFallback: false };
     }
 
     const candidateNodes = [];
@@ -201,7 +221,11 @@ function resolveJsRunner(candidateInstallations = []) {
         const pf = process.env.ProgramFiles || "C:\\Program Files";
         const pf86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
         const localApp = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+        const appData = process.env.APPDATA || path.join(home, "AppData", "Roaming");
         candidateNodes.push(
+            path.join(appData, "fnm", "aliases", "default", "node.exe"),
+            path.join(localApp, "fnm", "aliases", "default", "node.exe"),
+            process.env.NVM_SYMLINK ? path.join(process.env.NVM_SYMLINK, "node.exe") : "",
             path.join(pf, "nodejs", "node.exe"),
             path.join(pf86, "nodejs", "node.exe"),
             path.join(localApp, "Programs", "nodejs", "node.exe"),
@@ -209,6 +233,8 @@ function resolveJsRunner(candidateInstallations = []) {
         );
     } else {
         candidateNodes.push(
+            path.join(home, ".local", "share", "fnm", "aliases", "default", "bin", "node"),
+            path.join(home, "Library", "Application Support", "fnm", "aliases", "default", "bin", "node"),
             "/opt/homebrew/bin/node",
             "/usr/local/bin/node",
             "/opt/local/bin/node",
@@ -678,6 +704,66 @@ function findFirstIcnsFile(appPath) {
     }
 }
 
+function ensureBootstrapHealScript() {
+    const paths = getStatePaths();
+    fs.mkdirSync(paths.stateDir, { recursive: true });
+    const bakedRoot = ROOT_DIR;
+    const bootstrapCode = `#!/usr/bin/env node
+"use strict";
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+const stateDir = process.env.AG_STATE_DIR_OVERRIDE
+    ? path.resolve(process.env.AG_STATE_DIR_OVERRIDE)
+    : path.dirname(__filename);
+const cfgPath = path.join(stateDir, "config.json");
+const home = process.env.AG_HOME_OVERRIDE ? path.resolve(process.env.AG_HOME_OVERRIDE) : os.homedir();
+
+let cfg = {};
+if (fs.existsSync(cfgPath)) {
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")) || {}; } catch (_) {}
+}
+
+const candidates = [
+    cfg.repoRoot,
+    ${JSON.stringify(bakedRoot)},
+    path.join(home, "workspaces", "antigravity2-cn"),
+    path.join(home, "AI", "antigravity2-cn"),
+    path.join(home, "Desktop", "antigravity2-cn"),
+    path.join(home, "Downloads", "antigravity2-cn")
+].filter(Boolean);
+
+let chosenRoot = "";
+for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, "scripts", "auto_heal.js"))) {
+        chosenRoot = path.resolve(dir);
+        break;
+    }
+}
+
+if (!chosenRoot) {
+    process.exit(0);
+}
+
+if (cfg.repoRoot !== chosenRoot) {
+    try {
+        cfg.repoRoot = chosenRoot;
+        cfg.updatedAt = new Date().toISOString();
+        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\\n", "utf8");
+    } catch (_) {}
+}
+
+const mod = require(path.join(chosenRoot, "scripts", "auto_heal.js"));
+Promise.resolve(mod.cliMain(process.argv.slice(2))).catch(err => {
+    console.error("[自愈引导错误]", err && err.message ? err.message : err);
+    process.exit(1);
+});
+`;
+    fs.writeFileSync(paths.bootstrapScriptPath, bootstrapCode, { encoding: "utf8", mode: 0o755 });
+    return paths.bootstrapScriptPath;
+}
+
 function createMacLauncherBundle(targetAppPath, launcherDir) {
     const isIde = targetAppPath.toLowerCase().includes("ide");
     const bundleName = isIde
@@ -728,7 +814,8 @@ function createMacLauncherBundle(targetAppPath, launcherDir) {
     fs.writeFileSync(path.join(contentsDir, "Info.plist"), infoPlist, "utf8");
 
     const runner = resolveJsRunner([targetAppPath]);
-    const escapedHealScript = path.join(__dirname, "auto_heal.js").replace(/(["\\$`])/g, "\\$1");
+    const bootstrapScript = ensureBootstrapHealScript();
+    const escapedHealScript = bootstrapScript.replace(/(["\\$`])/g, "\\$1");
     const escapedTargetApp = targetAppPath.replace(/(["\\$`])/g, "\\$1");
     const escapedDefaultRunner = runner.bin.replace(/(["\\$`])/g, "\\$1");
 
@@ -811,7 +898,7 @@ function createWindowsLauncherVbs(targetInstallDir, launcherDir, options = {}) {
     const vbsPath = path.join(launcherDir, vbsName);
 
     const runner = resolveJsRunner([targetInstallDir]);
-    const healScript = path.join(__dirname, "auto_heal.js");
+    const healScript = ensureBootstrapHealScript();
     const vbsEsc = (s) => String(s).replace(/"/g, '""');
 
     const envPrefix = runner.isElectronFallback
@@ -1120,11 +1207,17 @@ function buildMacLaunchAgentPlistXml(options = {}) {
     const paths = getStatePaths();
     const appDirs = discoverClientAndIdeDirs(options.installDirs);
     const runner = resolveJsRunner(appDirs);
+    const bootstrapScript = ensureBootstrapHealScript();
 
     const candidateWatchPaths = [];
     for (const appDir of appDirs) {
-        const resDir = path.join(appDir, "Contents", "Resources");
-        candidateWatchPaths.push(fs.existsSync(resDir) ? resDir : appDir);
+        const resolvedApp = path.resolve(appDir);
+        const parentDir = path.dirname(resolvedApp);
+        if (parentDir && fs.existsSync(parentDir)) {
+            candidateWatchPaths.push(parentDir);
+        }
+        const resDir = path.join(resolvedApp, "Contents", "Resources");
+        candidateWatchPaths.push(fs.existsSync(resDir) ? resDir : resolvedApp);
     }
     const extParents = [
         path.join(paths.home, ".antigravity-ide", "extensions"),
@@ -1146,8 +1239,21 @@ function buildMacLaunchAgentPlistXml(options = {}) {
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
 
+    const macPathDirs = [
+        runner.bin && !runner.isElectronFallback ? path.dirname(runner.bin) : "",
+        path.join(paths.home, ".local", "share", "fnm", "aliases", "default", "bin"),
+        path.join(paths.home, "Library", "Application Support", "fnm", "aliases", "default", "bin"),
+        path.join(paths.home, ".fnm", "current", "bin"),
+        path.join(paths.home, ".volta", "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin"
+    ].filter(Boolean);
     const envEntries = [
-        `    <key>PATH</key>\n    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>`
+        `    <key>PATH</key>\n    <string>${xmlEsc(Array.from(new Set(macPathDirs)).join(":"))}</string>`
     ];
     if (runner.isElectronFallback) {
         envEntries.push(`    <key>ELECTRON_RUN_AS_NODE</key>\n    <string>1</string>`);
@@ -1164,7 +1270,7 @@ function buildMacLaunchAgentPlistXml(options = {}) {
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEsc(runner.bin)}</string>
-    <string>${xmlEsc(path.join(__dirname, "auto_heal.js"))}</string>
+    <string>${xmlEsc(bootstrapScript)}</string>
     <string>--guard-tick</string>
   </array>
   <key>EnvironmentVariables</key>
@@ -1175,6 +1281,10 @@ ${envEntries.join("\n")}
   <array>
 ${watchPathsXml}
   </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
   <key>KeepAlive</key>
   <dict>
     <key>PathState</key>
@@ -1234,6 +1344,7 @@ function installGuard(options = {}) {
         fs.mkdirSync(paths.winLauncherDir, { recursive: true });
         const appDirs = discoverClientAndIdeDirs(options.installDirs);
         const runner = resolveJsRunner(appDirs);
+        const bootstrapScript = ensureBootstrapHealScript();
         const guardVbsPath = path.join(paths.winLauncherDir, "guard_runner.vbs");
         const vbsEsc = (s) => String(s).replace(/"/g, '""');
         const envLine = runner.isElectronFallback
@@ -1243,7 +1354,7 @@ function installGuard(options = {}) {
             'Dim sh',
             'Set sh = CreateObject("WScript.Shell")',
             envLine.trimEnd(),
-            `sh.Run """${vbsEsc(runner.bin)}"" ""${vbsEsc(path.join(__dirname, "auto_heal.js"))}"" --guard-daemon", 0, False`,
+            `sh.Run """${vbsEsc(runner.bin)}"" ""${vbsEsc(bootstrapScript)}"" --guard-daemon", 0, False`,
             ""
         ]
             .filter(Boolean)
@@ -1349,6 +1460,131 @@ function uninstallGuard(options = {}) {
     }
 }
 
+function inspectCdpThemePatchStatus(paths = getStatePaths()) {
+    const deployedDir = path.join(paths.home, ".gemini", "antigravity", "theme-patch");
+    const daemonScript = path.join(deployedDir, "core", "daemon.mjs");
+    const userConfigPath = path.join(deployedDir, "user", "config.json");
+    const overridePath = path.join(deployedDir, "user", "i18n.override.json");
+    const tokenMonitorScript = path.join(paths.home, ".gemini", "antigravity", "token-monitor", "monitor_server.mjs");
+
+    const installed = fs.existsSync(daemonScript);
+    let enabled = false;
+    let i18nEnabled = false;
+    let overrideCount = 0;
+
+    if (fs.existsSync(userConfigPath)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(userConfigPath, "utf8"));
+            enabled = cfg.enabled !== false;
+            i18nEnabled = Boolean(cfg && cfg.modules && cfg.modules.i18n === true);
+        } catch (_) {}
+    }
+    if (fs.existsSync(overridePath)) {
+        try {
+            const ov = JSON.parse(fs.readFileSync(overridePath, "utf8"));
+            if (ov && ov.exact && typeof ov.exact === "object") {
+                overrideCount = Object.keys(ov.exact).length;
+            }
+        } catch (_) {}
+    }
+
+    const pidFile = path.join(os.tmpdir(), "ag-theme-daemon-default.pid");
+    let daemonPid = null;
+    let daemonAlive = false;
+    if (fs.existsSync(pidFile)) {
+        try {
+            const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+            if (pid > 0) {
+                daemonPid = pid;
+                daemonAlive = isPidAlive(pid);
+            }
+        } catch (_) {}
+    }
+
+    let serviceRegistered = false;
+    let serviceLoaded = false;
+    let serviceDetail = "";
+    if (process.platform === "darwin") {
+        const launchAgentsDir = path.join(paths.home, "Library", "LaunchAgents");
+        for (const label of ["com.antigravity.customfont", "com.antigravity.theme"]) {
+            const plist = path.join(launchAgentsDir, `${label}.plist`);
+            if (fs.existsSync(plist)) {
+                serviceRegistered = true;
+                serviceDetail = label;
+                if (!process.env.AG_HOME_OVERRIDE) {
+                    const res = runLaunchctlAsUser(["print", `gui/${paths.uid}/${label}`]);
+                    if (res.status === 0) serviceLoaded = true;
+                } else {
+                    serviceLoaded = true;
+                }
+                break;
+            }
+        }
+    } else if (process.platform === "win32") {
+        const localVbs = path.join(deployedDir, "AntigravityThemeDaemon.vbs");
+        serviceRegistered = fs.existsSync(localVbs);
+        serviceDetail = serviceRegistered ? localVbs : "";
+        if (serviceRegistered && !process.env.AG_HOME_OVERRIDE) {
+            try {
+                const q = child_process.spawnSync("schtasks", ["/Query", "/TN", "AntigravityThemeKeepAlive"], {
+                    windowsHide: true,
+                    stdio: "ignore"
+                });
+                if (q.status === 0) {
+                    serviceLoaded = true;
+                    serviceDetail = "AntigravityThemeKeepAlive";
+                }
+            } catch (_) {}
+        }
+    } else {
+        const unitFile = path.join(paths.home, ".config", "systemd", "user", "antigravity-theme.service");
+        serviceRegistered = fs.existsSync(unitFile);
+        serviceDetail = serviceRegistered ? unitFile : "";
+        if (serviceRegistered && !process.env.AG_HOME_OVERRIDE) {
+            try {
+                const q = child_process.spawnSync("systemctl", ["--user", "is-active", "--quiet", "antigravity-theme.service"], {
+                    stdio: "ignore"
+                });
+                serviceLoaded = q.status === 0;
+            } catch (_) {}
+        }
+    }
+
+    let portFile = "";
+    if (process.platform === "darwin") {
+        portFile = path.join(paths.home, "Library", "Application Support", "Antigravity", "DevToolsActivePort");
+    } else if (process.platform === "win32") {
+        portFile = path.join(process.env.APPDATA || path.join(paths.home, "AppData", "Roaming"), "Antigravity", "DevToolsActivePort");
+    } else {
+        portFile = path.join(paths.home, ".config", "Antigravity", "DevToolsActivePort");
+    }
+
+    let devToolsPort = null;
+    if (portFile && fs.existsSync(portFile)) {
+        try {
+            const firstLine = fs.readFileSync(portFile, "utf8").split(/\r?\n/)[0].trim();
+            if (/^\d+$/.test(firstLine)) {
+                devToolsPort = Number(firstLine);
+            }
+        } catch (_) {}
+    }
+
+    return {
+        deployedDir,
+        installed,
+        enabled,
+        i18nEnabled,
+        overrideCount,
+        daemonPid,
+        daemonAlive,
+        serviceRegistered,
+        serviceLoaded,
+        serviceDetail,
+        devToolsPort,
+        tokenMonitorDeployed: fs.existsSync(tokenMonitorScript)
+    };
+}
+
 function getGuardAndLauncherStatus(options = {}) {
     const paths = getStatePaths();
     const probe = probeAllTargets(options);
@@ -1395,6 +1631,9 @@ function getGuardAndLauncherStatus(options = {}) {
     }
 
     const pendingPatch = fs.existsSync(paths.pendingFlagPath);
+    const cdp = inspectCdpThemePatchStatus(paths);
+    const prefs = loadInstallPreferences();
+    const repoRootValid = prefs && prefs.repoRoot ? fs.existsSync(prefs.repoRoot) : true;
     return {
         probe,
         launcherInstalled,
@@ -1402,7 +1641,10 @@ function getGuardAndLauncherStatus(options = {}) {
         guardInstalled,
         guardRunning,
         pendingPatch,
-        stateDir: paths.stateDir
+        stateDir: paths.stateDir,
+        cdp,
+        prefs,
+        repoRootValid
     };
 }
 
@@ -1676,7 +1918,29 @@ function handlePostSyncRelocalize({ addedCount = 0, updatedCount = 0 } = {}) {
         });
     }
 
+    const paths = getStatePaths();
+    const prefs = loadInstallPreferences();
+    const cdpStatus = inspectCdpThemePatchStatus(paths);
     const appDirs = discoverClientAndIdeDirs();
+    const hasStaticAppLocalization = appDirs.some(appDir => probeAppTargetStatus(appDir).localized);
+
+    // 纯 CDP 模式下绝不修改 Desktop/IDE 的 app.asar，仅热触发一次 CDP --once 同步词库
+    if ((prefs.mode === "cdp" || cdpStatus.i18nEnabled) && !hasStaticAppLocalization) {
+        const deployedDaemon = path.join(cdpStatus.deployedDir, "core", "daemon.mjs");
+        if (fs.existsSync(deployedDaemon)) {
+            const runner = resolveJsRunner(appDirs);
+            if (!runner.isElectronFallback) {
+                child_process.spawnSync(runner.bin, ["--disable-warning=ExperimentalWarning", deployedDaemon, "--once"], {
+                    stdio: "ignore",
+                    windowsHide: true
+                });
+            }
+        }
+        clearPendingFlag();
+        console.log("[同步联动] 当前为纯 CDP 零修改模式，已同步词库并跳过 ASAR 静态重注。");
+        return;
+    }
+
     let hasRunningApp = false;
     let patchedIdleCount = 0;
 
@@ -1710,6 +1974,10 @@ function handlePostSyncRelocalize({ addedCount = 0, updatedCount = 0 } = {}) {
 
 function printFormattedStatus(options = {}) {
     const info = getGuardAndLauncherStatus(options);
+    const cdp = info.cdp || {};
+    const cdpDesktopActive = Boolean(
+        cdp.installed && cdp.enabled && cdp.i18nEnabled && (cdp.daemonAlive || cdp.serviceLoaded)
+    );
     console.log("======================================================");
     console.log(" Antigravity 全景汉化与自愈状态报告 (--status)");
     console.log("======================================================");
@@ -1719,7 +1987,14 @@ function printFormattedStatus(options = {}) {
         console.log("  - (未检测到已安装的 Desktop / Antigravity IDE)");
     } else {
         for (const a of info.probe.apps) {
-            const badge = a.localized ? "✓ 已汉化" : "✗ 未汉化 (原版英文)";
+            let badge = "✗ 未汉化 (原版英文)";
+            if (a.localized) {
+                badge = "✓ 已汉化 (ASAR 静态注入)";
+            } else if (String(a.kind || "").startsWith("desktop") && cdpDesktopActive) {
+                badge = "✓ 已汉化 (纯 CDP 零修改热注入 · 原版签名完好)";
+            } else if (a.kind === "ide" && cdp.installed && cdp.i18nEnabled) {
+                badge = "- 未静态注入 (当前为纯 CDP 模式，仅作用于 Desktop 客户端；如需汉化 IDE 本体可附加 --asar)";
+            }
             console.log(`  - [${a.kind}] v${a.version} | ${badge} | ${a.path}`);
         }
     }
@@ -1732,12 +2007,33 @@ function printFormattedStatus(options = {}) {
             console.log(`  - [vscode-ext] v${e.version} | ${badge} | ${e.path}`);
         }
     }
-    console.log("\n[3] 更新后自动重汉化状态:");
+    console.log("\n[3] 纯 CDP 零修改守护状态 (默认推荐方案):");
+    if (!cdp.installed) {
+        console.log("  - 守护服务: 未安装 (可执行 --cdp-only 启用)");
+    } else {
+        const daemonBadge = cdp.daemonAlive
+            ? `✓ 运行中 (pid=${cdp.daemonPid})`
+            : (cdp.serviceLoaded ? "! 服务已加载但守护进程暂未运行" : "✗ 未运行");
+        const svcBadge = cdp.serviceRegistered
+            ? `${cdp.serviceLoaded ? "已激活" : "已注册未加载"} (${cdp.serviceDetail || "system"})`
+            : "未注册开机自启";
+        console.log(`  - 守护服务: ${daemonBadge} | 自启: ${svcBadge}`);
+        console.log(
+            `  - 汉化模块: ${cdp.enabled && cdp.i18nEnabled ? "✓ 已开启" : "✗ 未开启"} (补充词库 ${cdp.overrideCount} 条) | Token Monitor: ${cdp.tokenMonitorDeployed ? "✓ 已部署" : "未部署"}`
+        );
+        console.log(
+            `  - 调试端口 (DevToolsActivePort): ${cdp.devToolsPort ? `✓ 端口 ${cdp.devToolsPort} 就绪` : "未检测到活跃端口 (客户端未启动或未开启调试端口)"}`
+        );
+    }
+    if (!info.repoRootValid && info.prefs && info.prefs.repoRoot) {
+        console.log(`  - [提示] config.json 记录的仓库路径已失效 (${info.prefs.repoRoot})，请重新运行 --cdp-only 刷新配置。`);
+    }
+    console.log("\n[4] ASAR 静态补丁自愈状态 (--asar 模式):");
     console.log(
-        `  - 方案 A (智能自愈启动器): ${info.launcherInstalled ? "✓ 已启用 (" + info.launcherPaths.join(", ") + ")" : "未创建 (可通过 --create-launcher 启用)"}`
+        `  - 方案 A (智能自愈启动器): ${info.launcherInstalled ? "✓ 已启用 (" + info.launcherPaths.join(", ") + ")" : "未创建 (仅 --asar 模式使用)"}`
     );
     console.log(
-        `  - 方案 B (空闲态静默守护): ${info.guardInstalled ? (info.guardRunning ? "✓ 已注册并就绪" : "! 已注册但未激活") : "未安装 (可通过 --install-guard 启用)"}`
+        `  - 方案 B (空闲态静默守护): ${info.guardInstalled ? (info.guardRunning ? "✓ 已注册并就绪" : "! 已注册但未激活") : "未安装 (仅 --asar 模式使用)"}`
     );
     console.log(`  - 待执行重注标记 (pending): ${info.pendingPatch ? "是 (等待客户端空闲自动重注)" : "无"}`);
     console.log("======================================================");
@@ -1811,9 +2107,11 @@ module.exports = {
     buildMacLaunchAgentPlistXml,
     installGuard,
     uninstallGuard,
+    inspectCdpThemePatchStatus,
     getGuardAndLauncherStatus,
     runGuardTick,
     runGuardDaemon,
     handlePostSyncRelocalize,
-    printFormattedStatus
+    printFormattedStatus,
+    cliMain
 };

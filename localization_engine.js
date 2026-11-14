@@ -4529,16 +4529,24 @@ function deployTokenMonitorService(home) {
     if (fs.existsSync(deployedDaemon)) {
         fs.mkdirSync(path.dirname(wrapperDaemon), { recursive: true });
         const realDaemonUrl = pathToFileURL(deployedDaemon).href;
-        const monitorServerUrl = pathToFileURL(path.join(dstTmDir, 'monitor_server.mjs')).href;
         const wrapperCode = `#!/usr/bin/env node
 // Auto-generated wrapper -> ${deployedDaemon}
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+
 await import(${JSON.stringify(realDaemonUrl)});
+
 if (!process.argv.includes('--once')) {
-  try {
-    const { startTokenMonitorServer } = await import(${JSON.stringify(monitorServerUrl)});
-    await startTokenMonitorServer({ host: '127.0.0.1', port: 18923 });
-  } catch (e) {
-    console.warn('[Token Monitor] 随守护启动失败:', e?.message || e);
+  const monitorFile = path.join(os.homedir(), '.gemini', 'antigravity', 'token-monitor', 'monitor_server.mjs');
+  if (fs.existsSync(monitorFile)) {
+    try {
+      const { startTokenMonitorServer } = await import(pathToFileURL(monitorFile).href);
+      await startTokenMonitorServer({ host: '127.0.0.1', port: 18923 });
+    } catch (e) {
+      console.warn('[Token Monitor] 随守护启动失败:', e?.message || e);
+    }
   }
 }
 `;
@@ -4550,6 +4558,10 @@ if (!process.argv.includes('--once')) {
 
 function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
     if (!deployedInfo) return false;
+    for (let i = 0; i < 12; i += 1) {
+        if (checkTokenMonitorHealthSync()) return true;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
 
     if (process.platform === 'darwin') {
         try {
@@ -4572,6 +4584,36 @@ function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
                 timeout: 4000
             });
         } catch (e) {}
+    } else if (process.platform === 'win32') {
+        let restarted = false;
+        const restartVbs = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'AntigravityThemeRestart.vbs');
+        if (fs.existsSync(restartVbs)) {
+            try {
+                const r = child_process.spawnSync('wscript.exe', ['//B', '//NoLogo', restartVbs], {
+                    windowsHide: true,
+                    stdio: 'ignore',
+                    timeout: 5000
+                });
+                restarted = r.status === 0;
+            } catch (e) {}
+        }
+        if (!restarted) {
+            try {
+                const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
+                if (fs.existsSync(pidFile)) {
+                    const oldPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+                    if (oldPid > 0 && oldPid !== process.pid) {
+                        try { process.kill(oldPid, 'SIGTERM'); } catch (e) {}
+                        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+                    }
+                }
+                child_process.spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeKeepAlive'], {
+                    windowsHide: true,
+                    stdio: 'ignore',
+                    timeout: 4000
+                });
+            } catch (e) {}
+        }
     }
 
     for (let i = 0; i < 4; i += 1) {
@@ -4583,7 +4625,9 @@ function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
     const serverEntry = path.join(deployedInfo.dstTmDir, 'monitor_server.mjs');
     if (fs.existsSync(serverEntry)) {
         try {
-            const child = child_process.spawn(process.execPath, [serverEntry, '--daemon', '--host', '127.0.0.1', '--port', '18923'], {
+            let stableNode = process.execPath;
+            try { stableNode = fs.realpathSync.native(process.execPath); } catch (e) {}
+            const child = child_process.spawn(stableNode, [serverEntry, '--daemon', '--host', '127.0.0.1', '--port', '18923'], {
                 detached: true,
                 stdio: 'ignore',
                 windowsHide: true
@@ -4600,15 +4644,43 @@ function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
 
 function installThemePatchIfNeeded(options = {}) {
     const themePatchDir = path.join(__dirname, 'theme_patch');
-    if (!fs.existsSync(path.join(themePatchDir, 'install.mjs'))) return;
+    if (!fs.existsSync(path.join(themePatchDir, 'install.mjs'))) {
+        return { ok: false, skipped: true, reason: 'missing_installer' };
+    }
 
     const { home } = resolveThemeUserHome();
     console.log(`\n[主题] 检测到 theme_patch 目录，正在同步部署船板主题与实时遥测守护服务...`);
     cleanupLegacyAntigravityPatch(home);
 
+    const deployedUserDir = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user');
+    const deployedUserCfgPath = path.join(deployedUserDir, 'config.json');
+    let enableThemeI18n;
+    if (typeof options.enableThemeI18n === 'boolean') {
+        enableThemeI18n = options.enableThemeI18n;
+    } else {
+        let existingModuleI18n;
+        if (fs.existsSync(deployedUserCfgPath)) {
+            try {
+                const existingCfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
+                if (existingCfg && existingCfg.modules && typeof existingCfg.modules.i18n === 'boolean') {
+                    existingModuleI18n = existingCfg.modules.i18n;
+                }
+            } catch (e) {}
+        }
+        enableThemeI18n = typeof existingModuleI18n === 'boolean' ? existingModuleI18n : Boolean(options.keepThemeI18n);
+    }
+
+    // 先前置部署 Token Monitor、user/custom.*、config.json 与补充词库，确保后续守护启动与首轮 --once 即带全量配置
+    let tmDeployed = null;
+    try {
+        stopStandaloneTokenMonitor(home);
+        tmDeployed = deployTokenMonitorService(home);
+    } catch (e) {
+        console.warn(`[监控警告] 部署 Token Monitor 服务异常: ${e.message}`);
+    }
+
     let customChanged = false;
     try {
-        const deployedUserDir = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user');
         const repoCss = path.join(themePatchDir, 'user', 'custom.css');
         const repoJs = path.join(themePatchDir, 'user', 'custom.js');
         if (syncUserCustomExtensionFile(repoCss, path.join(deployedUserDir, 'custom.css'), 'css')) {
@@ -4621,27 +4693,39 @@ function installThemePatchIfNeeded(options = {}) {
         console.warn(`[主题警告] 同步 user/custom.* 扩展层异常: ${e.message}`);
     }
 
+    try {
+        fs.mkdirSync(deployedUserDir, { recursive: true });
+        let cfg = {};
+        if (fs.existsSync(deployedUserCfgPath)) {
+            cfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
+        } else {
+            const templateCfgPath = path.join(themePatchDir, 'user', 'config.json');
+            if (fs.existsSync(templateCfgPath)) {
+                cfg = JSON.parse(fs.readFileSync(templateCfgPath, 'utf8'));
+            }
+        }
+        if (!cfg.modules || typeof cfg.modules !== 'object') cfg.modules = {};
+        if (cfg.modules.i18n !== enableThemeI18n) {
+            cfg.modules.i18n = enableThemeI18n;
+            fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+        } else if (!fs.existsSync(deployedUserCfgPath)) {
+            fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+        }
+        if (enableThemeI18n) {
+            syncThemePatchOverrideDict(options);
+        }
+    } catch (e) {
+        console.warn(`[主题警告] 预同步 CDP 汉化配置异常: ${e.message}`);
+    }
+
     const res = runThemePatchCli(['install']);
-    if (res.skipped) return;
+    if (res.skipped) return { ok: false, skipped: true, reason: 'node_below_22_or_missing_installer' };
     if (res.status !== 0) {
         console.warn(`[主题警告] 船板主题服务执行异常: exit=${res.status}`);
-        return;
+        return { ok: false, status: res.status, reason: 'install_failed' };
     }
 
-    let tmDeployed = null;
     try {
-        stopStandaloneTokenMonitor(home);
-        tmDeployed = deployTokenMonitorService(home);
-    } catch (e) {
-        console.warn(`[监控警告] 部署 Token Monitor 服务异常: ${e.message}`);
-    }
-
-    const enableThemeI18n = typeof options.enableThemeI18n === 'boolean'
-        ? options.enableThemeI18n
-        : Boolean(options.keepThemeI18n);
-
-    try {
-        const deployedUserCfgPath = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'user', 'config.json');
         let needHotReload = customChanged;
         if (fs.existsSync(deployedUserCfgPath)) {
             const cfg = JSON.parse(fs.readFileSync(deployedUserCfgPath, 'utf8'));
@@ -4652,7 +4736,8 @@ function installThemePatchIfNeeded(options = {}) {
                 needHotReload = true;
             }
         }
-        if (enableThemeI18n) {
+        const deployedOverridePath = path.join(deployedUserDir, 'i18n.override.json');
+        if (enableThemeI18n && !fs.existsSync(deployedOverridePath)) {
             syncThemePatchOverrideDict(options);
             needHotReload = true;
         }
@@ -4669,28 +4754,6 @@ function installThemePatchIfNeeded(options = {}) {
         console.warn(`[主题警告] 同步 CDP 汉化配置异常: ${e.message}`);
     }
 
-    // Windows 非管理员权限下 schtasks ONLOGON 会被拒绝而回退为当前进程树子进程；
-    // 通过普通用户允许的 /SC MINUTE 临时计划任务跳板由系统 Schedule 服务重新拉起，彻底脱离客户端 Job Object 防止重启被连带强杀
-    if (process.platform === 'win32') {
-        try {
-            const localVbs = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'AntigravityThemeDaemon.vbs');
-            if (fs.existsSync(localVbs)) {
-                const tempTask = 'AntigravityThemeBreakaway';
-                const tr = `wscript.exe //B //NoLogo "${localVbs}"`;
-                const cr = child_process.spawnSync(
-                    'schtasks',
-                    ['/Create', '/TN', tempTask, '/TR', tr, '/SC', 'MINUTE', '/MO', '30', '/F'],
-                    { stdio: 'ignore', windowsHide: true }
-                );
-                if (cr.status === 0) {
-                    child_process.spawnSync('schtasks', ['/Run', '/TN', tempTask], { stdio: 'ignore', windowsHide: true });
-                    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);
-                    child_process.spawnSync('schtasks', ['/Delete', '/TN', tempTask, '/F'], { stdio: 'ignore', windowsHide: true });
-                }
-            }
-        } catch (e) {}
-    }
-
     if (tmDeployed) {
         const monitorReady = restartDaemonWithMonitorIfNeeded(home, tmDeployed);
         if (monitorReady) {
@@ -4701,6 +4764,7 @@ function installThemePatchIfNeeded(options = {}) {
     }
 
     console.log(`[主题] 船板主题与实时遥测守护服务部署完成！`);
+    return { ok: true };
 }
 
 function uninstallThemePatchIfNeeded() {
@@ -4782,11 +4846,21 @@ function main() {
     for (const [flag, subcmd] of Object.entries(themeSubcmdMap)) {
         if (args.includes(flag)) {
             if (subcmd === 'install') {
-                installThemePatchIfNeeded({
-                    enableThemeI18n: !args.includes('--no-theme-i18n'),
-                    useTw: USE_TW,
-                    brandTitle: BRAND_TITLE_MODE
+                const savedPrefs = autoHeal.loadInstallPreferences();
+                let enableThemeI18n;
+                if (args.includes('--no-theme-i18n')) {
+                    enableThemeI18n = false;
+                } else if (args.includes('--theme-i18n')) {
+                    enableThemeI18n = true;
+                }
+                const hasExplicitBrand = args.some(a => a === '--brand-title' || a.startsWith('--brand-title='));
+                const r = installThemePatchIfNeeded({
+                    enableThemeI18n,
+                    keepThemeI18n: savedPrefs?.mode !== 'asar',
+                    useTw: args.includes('--tw') ? true : Boolean(savedPrefs?.useTw || USE_TW),
+                    brandTitle: hasExplicitBrand ? BRAND_TITLE_MODE : (savedPrefs?.brandTitle || BRAND_TITLE_MODE)
                 });
+                if (!r || !r.ok) process.exit(1);
                 return;
             }
             if (subcmd === 'uninstall') {
@@ -4802,6 +4876,16 @@ function main() {
 
     if (args.includes('--cdp-only') && !args.includes('--asar') && !huifu) {
         console.log("====== 正在切换并部署 Antigravity 纯 CDP 零修改汉化模式 (方案 A) ======");
+        try {
+            autoHeal.saveInstallPreferences({
+                mode: 'cdp',
+                useTw: USE_TW,
+                brandTitle: BRAND_TITLE_MODE,
+                keepOptionNamesEn: KEEP_OPTION_NAMES_EN,
+                embedDualZh: EMBED_DUAL_ZH,
+                hideFloatBtn: HIDE_FLOAT_BTN
+            });
+        } catch (e) {}
         try {
             autoHeal.removeLaunchers();
             autoHeal.uninstallGuard();
@@ -4859,11 +4943,22 @@ function main() {
             }
         }
 
-        installThemePatchIfNeeded({
+        const cdpRes = installThemePatchIfNeeded({
             enableThemeI18n: true,
             useTw: USE_TW,
             brandTitle: BRAND_TITLE_MODE
         });
+        if (!cdpRes || !cdpRes.ok) {
+            console.error('[错误] 纯 CDP 汉化守护服务部署未成功（需要 Node.js >= 22.0.0；若需无高版本 Node 静态汉化请附加 --asar 参数运行）。');
+            process.exit(1);
+        }
+        if (targetMode !== 'client') {
+            const extTargets = discoverExtensionTargets(manualExtDirs);
+            for (const extDir of extTargets) {
+                console.log(`\n[扩展目标] 正在同步汉化外部编辑器扩展: ${path.basename(extDir)} (${extDir})`);
+                installExtensionTarget(extDir);
+            }
+        }
         return;
     }
 
@@ -4902,6 +4997,7 @@ function main() {
     if (!huifu) {
         try {
             autoHeal.saveInstallPreferences({
+                mode: 'asar',
                 useTw: USE_TW,
                 brandTitle: BRAND_TITLE_MODE,
                 keepOptionNamesEn: KEEP_OPTION_NAMES_EN,
