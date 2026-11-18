@@ -763,6 +763,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+if (!process.argv.includes('--once')) {
+  process.on('uncaughtException', (err) => {
+    try { console.error('[Daemon Guard] uncaughtException:', err?.message || err); } catch {}
+  });
+  process.on('unhandledRejection', (reason) => {
+    try { console.error('[Daemon Guard] unhandledRejection:', reason?.message || reason); } catch {}
+  });
+}
+
 await import(${JSON.stringify(realDaemonUrl)});
 
 if (!process.argv.includes('--once')) {
@@ -998,6 +1007,21 @@ WantedBy=default.target
         { stdio: 'ignore', windowsHide: true }
       );
       regRunInstalled = regRes.status === 0;
+      spawnSync(
+        'reg',
+        [
+          'add',
+          'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run',
+          '/v',
+          'AntigravityThemeDaemon',
+          '/t',
+          'REG_BINARY',
+          '/d',
+          '020000000000000000000000',
+          '/f'
+        ],
+        { stdio: 'ignore', windowsHide: true }
+      );
     } catch {}
 
     let keepaliveTaskCreated = false;
@@ -1467,6 +1491,10 @@ async function runUninstall() {
     }
     try {
       spawnSync('reg', ['delete', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', '/v', 'AntigravityThemeDaemon', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      spawnSync('reg', ['delete', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run', '/v', 'AntigravityThemeDaemon', '/f'], {
         stdio: 'ignore',
         windowsHide: true
       });

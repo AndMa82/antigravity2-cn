@@ -486,13 +486,18 @@ function probeAppTargetStatus(installDir) {
     const asarPath = asarCandidates.find(p => fs.existsSync(p));
     if (asarPath) {
         let localized = isAsarLocalizedFast(asarPath);
+        let proxyDllOk = true;
+        if (process.platform === "win32" && fs.existsSync(path.join(ROOT_DIR, "proxy_config", "version.dll"))) {
+            proxyDllOk = fs.existsSync(path.join(installDir, "version.dll"));
+        }
         return {
             kind: "desktop-v2",
             path: installDir,
             asarPath,
             version: readTargetVersion(installDir),
-            localized,
-            asarLocalized: localized
+            localized: localized && proxyDllOk,
+            asarLocalized: localized,
+            proxyDllOk
         };
     }
 
@@ -513,14 +518,19 @@ function probeAppTargetStatus(installDir) {
             ? fs.readFileSync(wbHtml, "utf8").includes("ag_agent_hanhua.js")
             : false;
         const extOk = fs.existsSync(extJs) ? hasTailSignatureFast(extJs, EXT_HOOK_END) : true;
+        let proxyDllOk = true;
+        if (process.platform === "win32" && fs.existsSync(path.join(ROOT_DIR, "proxy_config", "version.dll"))) {
+            proxyDllOk = fs.existsSync(path.join(installDir, "version.dll"));
+        }
         return {
             kind: "ide",
             path: installDir,
             appDir,
             version: readTargetVersion(installDir),
-            localized: htmlOk && extOk,
+            localized: htmlOk && extOk && proxyDllOk,
             htmlOk,
-            extOk
+            extOk,
+            proxyDllOk
         };
     }
 

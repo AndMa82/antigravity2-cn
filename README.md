@@ -104,7 +104,21 @@ node localization_engine.js --theme-doctor
 
 # 可选（传统全量模式）：修改 app.asar 与 Antigravity IDE（支持原生菜单/托盘汉化）
 node localization_engine.js --asar --brand-title english
+
+# 如需跳过或移除 Windows 免 TUN 透明代理模块
+node localization_engine.js --cdp-only --no-proxy
+node localization_engine.js --cdp-only --remove-proxy
 ```
+
+---
+
+## 🔌 Windows 免 TUN 透明代理自动注入
+
+本仓库已重新预集成 Windows 免 TUN 透明代理模块（[`proxy_config/version.dll`](proxy_config/version.dll) 与 [`proxy_config/config.json`](proxy_config/config.json)，基于 [yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)）：
+
+- **自动探测本地端口**：默认使用 `socks5` `127.0.0.1:7890`；注入时会自动检测配置端口是否活跃，若未监听则从系统代理及常见端口 `[7890, 7897, 10808, 10809, 18080, 1080]` 中探测活跃端口并自动更新 `proxy_config/config.json`。
+- **随汉化自动部署与巡检自愈**：执行 `--cdp-only`、`--theme-install` 或 `--asar` 安装时会自动将 `version.dll` 与 `config.json` 注入至 Antigravity / Antigravity IDE 主程序目录（已运行状态下同版本 `.dll` 自动跳过覆盖以避免占用冲突），并由后台守护进程周期巡检补齐；如需卸载清理可运行 `--huifu` 或 `--remove-proxy`。
+- **生效提示**：Windows 下 `version.dll` 仅在客户端启动时加载一次；初次注入后重启一次 Antigravity 客户端，即可无需开启 TUN 模式直接使用。
 
 ---
 
@@ -247,5 +261,6 @@ Antigravity 2.x 的“**添加 MCP 服务器 (Add MCP Server)**”市场目录�
 
 ## 🤝 致谢
 - 感谢所有参与测试与反馈的贡献者！
+- 特别鸣谢 **[yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy)** 提供优秀的 Windows 免 TUN 强制代理注入方案。
 - 特别鸣谢 **[Anarcadia/chuanban-antigravity-theme-patch](https://github.com/Anarcadia/chuanban-antigravity-theme-patch)** 提供优秀的纯 CDP 昼夜主题、实时遥测与无侵入内存注入架构。
 - 特别鸣谢 **[yiheng8023/antigravity-chinese](https://github.com/yiheng8023/antigravity-chinese)** 开放的词典成果（MIT 协议），为本次 v2.26.0+ 新增特性词条整合提供了重要基础。

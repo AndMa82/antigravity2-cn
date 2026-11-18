@@ -4222,10 +4222,132 @@ function restore10(installDir) {
 // ==========================================
 // 代理模块管理 (仅限 Windows 平台 Desktop/IDE 主程序目录注入)
 // ==========================================
+function isLocalPortListeningSync(port) {
+    const p = Number(port);
+    if (!Number.isInteger(p) || p <= 0 || p > 65535) return false;
+    try {
+        const probeCode = `const n=require('net');const s=n.connect(${p},'127.0.0.1',()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));s.setTimeout(300,()=>{s.destroy();process.exit(1)});`;
+        const res = child_process.spawnSync(process.execPath, ['-e', probeCode], {
+            stdio: 'ignore',
+            windowsHide: true,
+            timeout: 1200
+        });
+        return res.status === 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+function getWindowsSystemProxyPort() {
+    if (process.platform !== 'win32') return null;
+    try {
+        const out = child_process.execSync(
+            'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"',
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }
+        );
+        const enableMatch = out.match(/ProxyEnable\s+REG_DWORD\s+0x([0-9a-f]+)/i);
+        if (!enableMatch || parseInt(enableMatch[1], 16) !== 1) return null;
+        const serverMatch = out.match(/ProxyServer\s+REG_SZ\s+(.+)/i);
+        if (!serverMatch) return null;
+        const rawServer = serverMatch[1].trim();
+        const portMatch = rawServer.match(/(?:127\.0\.0\.1|localhost):(\d{2,5})/i) || rawServer.match(/:(\d{2,5})\b/);
+        if (portMatch) {
+            const p = parseInt(portMatch[1], 10);
+            if (p > 0 && p <= 65535) return p;
+        }
+    } catch (e) {}
+    return null;
+}
+
+let __proxyPortSynced = false;
+function syncProxyConfigPortIfNeeded(configPath) {
+    if (__proxyPortSynced || !fs.existsSync(configPath)) return;
+    __proxyPortSynced = true;
+    try {
+        const raw = fs.readFileSync(configPath, 'utf8');
+        const cfg = JSON.parse(raw);
+        if (!cfg.proxy || typeof cfg.proxy !== 'object') return;
+        const currentPort = Number(cfg.proxy.port);
+        if (currentPort > 0 && isLocalPortListeningSync(currentPort)) {
+            return;
+        }
+        const sysPort = getWindowsSystemProxyPort();
+        const candidates = [sysPort, 7890, 7897, 10808, 10809, 18080, 1080]
+            .filter((p, idx, arr) => p && p !== currentPort && arr.indexOf(p) === idx);
+        for (const p of candidates) {
+            if (isLocalPortListeningSync(p)) {
+                cfg.proxy.port = p;
+                fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+                console.log(`[代理] 检测到本地活跃代理端口 ${p}，已自动同步至 proxy_config/config.json`);
+                return;
+            }
+        }
+    } catch (e) {}
+}
+
+function injectProxyIfNeeded(installDir) {
+    if (process.platform !== 'win32') return;
+    if (!hasAntigravityResources(installDir)) return;
+    const proxyConfigDir = path.join(__dirname, 'proxy_config');
+    if (!fs.existsSync(proxyConfigDir)) return;
+
+    syncProxyConfigPortIfNeeded(path.join(proxyConfigDir, 'config.json'));
+
+    let files = [];
+    try {
+        files = fs.readdirSync(proxyConfigDir).filter(f => {
+            const fullPath = path.join(proxyConfigDir, f);
+            return fs.statSync(fullPath).isFile();
+        });
+    } catch (e) {
+        return;
+    }
+
+    if (files.length === 0) return;
+
+    console.log(`\n[代理] 检测到 proxy_config 配置目录，正在向 ${path.basename(installDir)} 注入免 TUN 代理模块...`);
+    const injectedFiles = [];
+    const skippedSameDll = [];
+    for (const file of files) {
+        const src = path.join(proxyConfigDir, file);
+        const dest = path.join(installDir, file);
+        try {
+            if (file.toLowerCase().endsWith('.dll') && fs.existsSync(dest)) {
+                const srcStat = fs.statSync(src);
+                const destStat = fs.statSync(dest);
+                if (srcStat.size === destStat.size) {
+                    skippedSameDll.push(file);
+                    continue;
+                }
+            }
+            fs.copyFileSync(src, dest);
+            injectedFiles.push(file);
+        } catch (e) {
+            console.warn(`[代理警告] 注入文件 ${file} 失败: ${e.message}`);
+        }
+    }
+
+    if (injectedFiles.length > 0) {
+        console.log(`[代理] 代理模块注入成功: ${injectedFiles.join(', ')}`);
+    }
+    if (skippedSameDll.length > 0) {
+        console.log(`[代理] ${skippedSameDll.join(', ')} 已存在且版本一致，跳过覆盖（免占用冲突）。`);
+    }
+}
+
 function restoreProxyIfNeeded(installDir) {
     if (process.platform !== 'win32') return;
     if (!hasAntigravityResources(installDir)) return;
     const proxyFiles = ['version.dll', 'dbghelp.dll', 'config.json'];
+    const proxyConfigDir = path.join(__dirname, 'proxy_config');
+    if (fs.existsSync(proxyConfigDir)) {
+        try {
+            const files = fs.readdirSync(proxyConfigDir);
+            for (const f of files) {
+                if (!proxyFiles.includes(f)) proxyFiles.push(f);
+            }
+        } catch (e) {}
+    }
 
     const removedFiles = [];
     for (const file of proxyFiles) {
@@ -4535,6 +4657,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+if (!process.argv.includes('--once')) {
+  process.on('uncaughtException', (err) => {
+    try { console.error('[Daemon Guard] uncaughtException:', err?.message || err); } catch {}
+  });
+  process.on('unhandledRejection', (reason) => {
+    try { console.error('[Daemon Guard] unhandledRejection:', reason?.message || reason); } catch {}
+  });
+}
 
 await import(${JSON.stringify(realDaemonUrl)});
 
@@ -4846,6 +4977,13 @@ function main() {
     for (const [flag, subcmd] of Object.entries(themeSubcmdMap)) {
         if (args.includes(flag)) {
             if (subcmd === 'install') {
+                if (process.platform === 'win32' && !args.includes('--no-proxy') && !args.includes('--remove-proxy')) {
+                    try {
+                        for (const installDir of detectInstallations()) {
+                            injectProxyIfNeeded(installDir);
+                        }
+                    } catch (e) {}
+                }
                 const savedPrefs = autoHeal.loadInstallPreferences();
                 let enableThemeI18n;
                 if (args.includes('--no-theme-i18n')) {
@@ -4902,7 +5040,11 @@ function main() {
 
         const asarPatcher = require(path.join(__dirname, 'scripts', 'asar_patcher.js'));
         for (const installDir of detectedTargets) {
-            restoreProxyIfNeeded(installDir);
+            if (args.includes('--remove-proxy')) {
+                restoreProxyIfNeeded(installDir);
+            } else if (!args.includes('--no-proxy')) {
+                injectProxyIfNeeded(installDir);
+            }
 
             let resourcesDir = "";
             if (fs.existsSync(path.join(installDir, "resources", "app.asar"))) {
@@ -5096,6 +5238,9 @@ function main() {
                 success = install20(resourcesDir);
             } else {
                 success = install10(installDir);
+            }
+            if (success && !args.includes('--no-proxy')) {
+                injectProxyIfNeeded(installDir);
             }
         }
 
