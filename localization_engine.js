@@ -4716,35 +4716,31 @@ function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
             });
         } catch (e) {}
     } else if (process.platform === 'win32') {
-        let restarted = false;
-        const restartVbs = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'AntigravityThemeRestart.vbs');
-        if (fs.existsSync(restartVbs)) {
-            try {
-                const r = child_process.spawnSync('wscript.exe', ['//B', '//NoLogo', restartVbs], {
-                    windowsHide: true,
-                    stdio: 'ignore',
-                    timeout: 5000
-                });
-                restarted = r.status === 0;
-            } catch (e) {}
-        }
-        if (!restarted) {
-            try {
-                const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
-                if (fs.existsSync(pidFile)) {
-                    const oldPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-                    if (oldPid > 0 && oldPid !== process.pid) {
-                        try { process.kill(oldPid, 'SIGTERM'); } catch (e) {}
-                        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-                    }
+        try {
+            const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
+            if (fs.existsSync(pidFile)) {
+                const oldPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
+                if (oldPid > 0 && oldPid !== process.pid) {
+                    try { process.kill(oldPid, 'SIGTERM'); } catch (e) {}
+                    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
                 }
-                child_process.spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeKeepAlive'], {
-                    windowsHide: true,
-                    stdio: 'ignore',
-                    timeout: 4000
-                });
-            } catch (e) {}
-        }
+            }
+            const r = child_process.spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeDaemon'], {
+                windowsHide: true,
+                stdio: 'ignore',
+                timeout: 4000
+            });
+            if (r.status !== 0) {
+                const localVbs = path.join(home, '.gemini', 'antigravity', 'theme-patch', 'AntigravityThemeDaemon.vbs');
+                if (fs.existsSync(localVbs)) {
+                    child_process.spawnSync('wscript.exe', ['//B', '//NoLogo', localVbs], {
+                        windowsHide: true,
+                        stdio: 'ignore',
+                        timeout: 4000
+                    });
+                }
+            }
+        } catch (e) {}
     }
 
     for (let i = 0; i < 4; i += 1) {
@@ -4835,11 +4831,22 @@ function installThemePatchIfNeeded(options = {}) {
                 cfg = JSON.parse(fs.readFileSync(templateCfgPath, 'utf8'));
             }
         }
+        if (!cfg.darkPreset) cfg.darkPreset = 'onyx';
         if (!cfg.modules || typeof cfg.modules !== 'object') cfg.modules = {};
+        let cfgUpdated = false;
         if (cfg.modules.i18n !== enableThemeI18n) {
             cfg.modules.i18n = enableThemeI18n;
-            fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-        } else if (!fs.existsSync(deployedUserCfgPath)) {
+            cfgUpdated = true;
+        }
+        if (typeof cfg.modules.coldBootHealer !== 'boolean') {
+            cfg.modules.coldBootHealer = true;
+            cfgUpdated = true;
+        }
+        if (typeof cfg.modules.cdpAutoRelaunch !== 'boolean') {
+            cfg.modules.cdpAutoRelaunch = true;
+            cfgUpdated = true;
+        }
+        if (cfgUpdated || !fs.existsSync(deployedUserCfgPath)) {
             fs.writeFileSync(deployedUserCfgPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
         }
         if (enableThemeI18n) {
@@ -4970,6 +4977,7 @@ function main() {
     const themeSubcmdMap = {
         '--theme-doctor': 'doctor',
         '--theme-verify': 'verify',
+        '--theme-relaunch': 'relaunch',
         '--theme-rollback': 'rollback',
         '--theme-uninstall': 'uninstall',
         '--theme-install': 'install'
@@ -5094,6 +5102,13 @@ function main() {
             console.error('[错误] 纯 CDP 汉化守护服务部署未成功（需要 Node.js >= 22.0.0；若需无高版本 Node 静态汉化请附加 --asar 参数运行）。');
             process.exit(1);
         }
+        try {
+            const cdpStatus = autoHeal.getGuardAndLauncherStatus()?.cdp;
+            if (cdpStatus && !cdpStatus.devToolsPort && detectedTargets.some(d => autoHeal.isClientOrUpdaterRunning([d]))) {
+                console.log('\n[提示] 检测到当前运行中的 Antigravity 未开启 CDP 调试端口（v2.33.0+ 默认关闭），已自动修补快捷方式附加 --remote-debugging-port=0。');
+                console.log('[提示] 请退出后通过桌面/开始菜单/任务栏图标重开一次客户端，或运行 `node localization_engine.js --theme-relaunch` 平滑重启即可生效！');
+            }
+        } catch (e) {}
         if (targetMode !== 'client') {
             const extTargets = discoverExtensionTargets(manualExtDirs);
             for (const extDir of extTargets) {

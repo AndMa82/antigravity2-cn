@@ -1503,8 +1503,9 @@ function inspectCdpThemePatchStatus(paths = getStatePaths()) {
     let daemonAlive = false;
     if (fs.existsSync(pidFile)) {
         try {
-            const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
-            if (pid > 0) {
+            const rawPid = fs.readFileSync(pidFile, "utf8").trim();
+            const pid = parseInt(rawPid.split(/\s+/)[0], 10);
+            if (pid > 0 && !/\bstop\b/i.test(rawPid)) {
                 daemonPid = pid;
                 daemonAlive = isPidAlive(pid);
             }
@@ -1535,16 +1536,32 @@ function inspectCdpThemePatchStatus(paths = getStatePaths()) {
         serviceRegistered = fs.existsSync(localVbs);
         serviceDetail = serviceRegistered ? localVbs : "";
         if (serviceRegistered && !process.env.AG_HOME_OVERRIDE) {
-            try {
-                const q = child_process.spawnSync("schtasks", ["/Query", "/TN", "AntigravityThemeKeepAlive"], {
-                    windowsHide: true,
-                    stdio: "ignore"
-                });
-                if (q.status === 0) {
-                    serviceLoaded = true;
-                    serviceDetail = "AntigravityThemeKeepAlive";
-                }
-            } catch (_) {}
+            for (const taskName of ["AntigravityThemeDaemon", "AntigravityThemeKeepAlive"]) {
+                try {
+                    const q = child_process.spawnSync("schtasks", ["/Query", "/TN", taskName], {
+                        windowsHide: true,
+                        stdio: "ignore"
+                    });
+                    if (q.status === 0) {
+                        serviceLoaded = true;
+                        serviceDetail = taskName;
+                        break;
+                    }
+                } catch (_) {}
+            }
+            if (!serviceLoaded) {
+                try {
+                    const rq = child_process.spawnSync(
+                        "reg",
+                        ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run", "/v", "AntigravityThemeDaemon"],
+                        { windowsHide: true, stdio: "ignore" }
+                    );
+                    if (rq.status === 0) {
+                        serviceLoaded = true;
+                        serviceDetail = "HKCU\\Run";
+                    }
+                } catch (_) {}
+            }
         }
     } else {
         const unitFile = path.join(paths.home, ".config", "systemd", "user", "antigravity-theme.service");
@@ -2001,7 +2018,13 @@ function printFormattedStatus(options = {}) {
             if (a.localized) {
                 badge = "✓ 已汉化 (ASAR 静态注入)";
             } else if (String(a.kind || "").startsWith("desktop") && cdpDesktopActive) {
-                badge = "✓ 已汉化 (纯 CDP 零修改热注入 · 原版签名完好)";
+                if (cdp.devToolsPort) {
+                    badge = "✓ 已汉化 (纯 CDP 零修改热注入 · 原版签名完好)";
+                } else if (isClientOrUpdaterRunning([a.path])) {
+                    badge = "! 待生效 (守护已就绪，但当前窗口未带 --remote-debugging-port，请重启客户端或执行 --theme-relaunch)";
+                } else {
+                    badge = "✓ 已就绪 (纯 CDP 零修改 · 客户端未启动，下次启动自动生效)";
+                }
             } else if (a.kind === "ide" && cdp.installed && cdp.i18nEnabled) {
                 badge = "- 未静态注入 (当前为纯 CDP 模式，仅作用于 Desktop 客户端；如需汉化 IDE 本体可附加 --asar)";
             }
