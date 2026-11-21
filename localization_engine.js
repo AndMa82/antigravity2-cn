@@ -4285,7 +4285,212 @@ function syncProxyConfigPortIfNeeded(configPath) {
     } catch (e) {}
 }
 
+let __macProxyInjected = false;
+let __macProxyRestored = false;
+
+function escapeXmlForPlist(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
+function detectMacProxyEndpoints() {
+    const env = process.env;
+    const existingHttp = env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy || '';
+    const existingAll = env.ALL_PROXY || env.all_proxy || '';
+    if (existingHttp || existingAll) {
+        return {
+            httpUrl: existingHttp || existingAll,
+            allUrl: existingAll || existingHttp
+        };
+    }
+
+    let httpUrl = '';
+    let allUrl = '';
+    try {
+        const scOut = child_process.execSync('/usr/sbin/scutil --proxy', {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 1500
+        });
+        const getVal = (key) => {
+            const m = scOut.match(new RegExp('^\\s*' + key + '\\s*:\\s*(.+)$', 'm'));
+            return m ? m[1].trim() : '';
+        };
+        if (getVal('HTTPSEnable') === '1' && getVal('HTTPSProxy') && getVal('HTTPSPort')) {
+            httpUrl = `http://${getVal('HTTPSProxy')}:${getVal('HTTPSPort')}`;
+        } else if (getVal('HTTPEnable') === '1' && getVal('HTTPProxy') && getVal('HTTPPort')) {
+            httpUrl = `http://${getVal('HTTPProxy')}:${getVal('HTTPPort')}`;
+        }
+        if (getVal('SOCKSEnable') === '1' && getVal('SOCKSProxy') && getVal('SOCKSPort')) {
+            allUrl = `socks5://${getVal('SOCKSProxy')}:${getVal('SOCKSPort')}`;
+        }
+    } catch (e) {}
+
+    if (httpUrl || allUrl) {
+        return {
+            httpUrl: httpUrl || allUrl,
+            allUrl: allUrl || httpUrl
+        };
+    }
+
+    let configPort = null;
+    try {
+        const cfgPath = path.join(__dirname, 'proxy_config', 'config.json');
+        if (fs.existsSync(cfgPath)) {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            const p = Number(cfg?.proxy?.port);
+            if (p > 0 && p <= 65535) configPort = p;
+        }
+    } catch (e) {}
+
+    const candidates = [configPort, 7890, 7897, 10808, 10809, 18080, 6152, 1080]
+        .filter((p, idx, arr) => p && arr.indexOf(p) === idx);
+    for (const p of candidates) {
+        if (isLocalPortListeningSync(p)) {
+            return {
+                httpUrl: `http://127.0.0.1:${p}`,
+                allUrl: `socks5://127.0.0.1:${p}`
+            };
+        }
+    }
+    return null;
+}
+
+function runLaunchctlForUser(launchArgs, sudoUser) {
+    try {
+        if (sudoUser) {
+            const uidRes = child_process.spawnSync('id', ['-u', sudoUser], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+            const uid = uidRes && uidRes.status === 0 ? uidRes.stdout.trim() : '';
+            if (uid) {
+                return child_process.spawnSync('/bin/launchctl', ['asuser', uid, '/bin/launchctl', ...launchArgs], {
+                    stdio: 'ignore',
+                    timeout: 3000
+                });
+            }
+        }
+        return child_process.spawnSync('/bin/launchctl', launchArgs, { stdio: 'ignore', timeout: 3000 });
+    } catch (e) {
+        return null;
+    }
+}
+
+function injectMacProxyIfNeeded() {
+    if (__macProxyInjected) return;
+    __macProxyInjected = true;
+
+    const endpoints = detectMacProxyEndpoints();
+    if (!endpoints) {
+        console.log('[代理] macOS 未检测到系统代理或本地活跃代理端口，跳过 GUI 环境变量注入（开启代理后重跑即可）。');
+        return;
+    }
+
+    const { sudoUser, home } = resolveThemeUserHome();
+    const envPairs = [
+        ['HTTP_PROXY', endpoints.httpUrl],
+        ['HTTPS_PROXY', endpoints.httpUrl],
+        ['http_proxy', endpoints.httpUrl],
+        ['https_proxy', endpoints.httpUrl],
+        ['ALL_PROXY', endpoints.allUrl],
+        ['all_proxy', endpoints.allUrl],
+        ['NO_PROXY', 'localhost,127.0.0.1,::1,.local'],
+        ['no_proxy', 'localhost,127.0.0.1,::1,.local']
+    ];
+
+    for (const [k, v] of envPairs) {
+        runLaunchctlForUser(['setenv', k, v], sudoUser);
+    }
+
+    const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents');
+    const plistLabel = 'com.antigravity.proxy-env';
+    const plistPath = path.join(launchAgentsDir, `${plistLabel}.plist`);
+    const setenvCmd = envPairs
+        .map(([k, v]) => `/bin/launchctl setenv ${k} '${String(v).replace(/'/g, "'\\''")}'`)
+        .join('; ');
+    const plistXml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+        '<plist version="1.0">',
+        '<dict>',
+        '  <key>Label</key>',
+        `  <string>${plistLabel}</string>`,
+        '  <key>ProgramArguments</key>',
+        '  <array>',
+        '    <string>/bin/sh</string>',
+        '    <string>-c</string>',
+        `    <string>${escapeXmlForPlist(setenvCmd)}</string>`,
+        '  </array>',
+        '  <key>RunAtLoad</key>',
+        '  <true/>',
+        '</dict>',
+        '</plist>',
+        ''
+    ].join('\n');
+
+    try {
+        fs.mkdirSync(launchAgentsDir, { recursive: true });
+        fs.writeFileSync(plistPath, plistXml, 'utf8');
+        if (sudoUser) {
+            try {
+                child_process.spawnSync('chown', [sudoUser, plistPath], { stdio: 'ignore' });
+            } catch (e) {}
+        }
+        const uidRes = sudoUser
+            ? child_process.spawnSync('id', ['-u', sudoUser], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+            : null;
+        const uid = uidRes && uidRes.status === 0 ? uidRes.stdout.trim() : (typeof process.getuid === 'function' ? String(process.getuid()) : '');
+        if (uid) {
+            runLaunchctlForUser(['bootout', `gui/${uid}/${plistLabel}`], sudoUser);
+            runLaunchctlForUser(['bootstrap', `gui/${uid}`, plistPath], sudoUser);
+        }
+        console.log(`[代理] macOS 免 TUN 代理环境变量已注入 (${endpoints.httpUrl} / ${endpoints.allUrl})，并写入 LaunchAgent 持久化。`);
+    } catch (e) {
+        console.warn(`[代理警告] 写入 macOS LaunchAgent 失败: ${e.message}`);
+    }
+}
+
+function restoreMacProxyIfNeeded() {
+    if (__macProxyRestored) return;
+    __macProxyRestored = true;
+
+    const { sudoUser, home } = resolveThemeUserHome();
+    const plistLabel = 'com.antigravity.proxy-env';
+    const plistPath = path.join(home, 'Library', 'LaunchAgents', `${plistLabel}.plist`);
+    const uidRes = sudoUser
+        ? child_process.spawnSync('id', ['-u', sudoUser], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        : null;
+    const uid = uidRes && uidRes.status === 0 ? uidRes.stdout.trim() : (typeof process.getuid === 'function' ? String(process.getuid()) : '');
+
+    if (uid) {
+        runLaunchctlForUser(['bootout', `gui/${uid}/${plistLabel}`], sudoUser);
+    }
+    const keys = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy'];
+    for (const k of keys) {
+        runLaunchctlForUser(['unsetenv', k], sudoUser);
+    }
+
+    let removed = false;
+    if (fs.existsSync(plistPath)) {
+        try {
+            fs.unlinkSync(plistPath);
+            removed = true;
+        } catch (e) {
+            console.warn(`[代理警告] 移除 macOS LaunchAgent 失败: ${e.message}`);
+        }
+    }
+    if (removed) {
+        console.log(`[代理] 已清理 macOS 免 TUN 代理环境变量与 LaunchAgent: ${plistPath}`);
+    }
+}
+
 function injectProxyIfNeeded(installDir) {
+    if (process.platform === 'darwin') {
+        injectMacProxyIfNeeded();
+        return;
+    }
     if (process.platform !== 'win32') return;
     if (!hasAntigravityResources(installDir)) return;
     const proxyConfigDir = path.join(__dirname, 'proxy_config');
@@ -4336,6 +4541,10 @@ function injectProxyIfNeeded(installDir) {
 }
 
 function restoreProxyIfNeeded(installDir) {
+    if (process.platform === 'darwin') {
+        restoreMacProxyIfNeeded();
+        return;
+    }
     if (process.platform !== 'win32') return;
     if (!hasAntigravityResources(installDir)) return;
     const proxyFiles = ['version.dll', 'dbghelp.dll', 'config.json'];
@@ -4985,7 +5194,7 @@ function main() {
     for (const [flag, subcmd] of Object.entries(themeSubcmdMap)) {
         if (args.includes(flag)) {
             if (subcmd === 'install') {
-                if (process.platform === 'win32' && !args.includes('--no-proxy') && !args.includes('--remove-proxy')) {
+                if ((process.platform === 'win32' || process.platform === 'darwin') && !args.includes('--no-proxy') && !args.includes('--remove-proxy')) {
                     try {
                         for (const installDir of detectInstallations()) {
                             injectProxyIfNeeded(installDir);
