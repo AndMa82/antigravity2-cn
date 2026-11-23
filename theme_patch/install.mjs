@@ -1617,7 +1617,7 @@ WantedBy=default.target
     const startupDir = path.join(appData, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
     const vbsFile = path.join(startupDir, 'AntigravityThemeDaemon.vbs');
     const localVbsFile = path.join(targetDir, 'AntigravityThemeDaemon.vbs');
-    const cmd = `""${process.execPath}"" --disable-warning=ExperimentalWarning ""${wrapperDaemon}""`;
+    const cmd = `""${process.execPath}"" --disable-warning=ExperimentalWarning ""${wrapperDaemon}"" --ensure`;
     const vbsContent = `\uFEFFSet WshShell = CreateObject("WScript.Shell")\r\nWshShell.Run "${cmd}", 0, False\r\n`;
     try {
       // 使用 UTF-16LE (带 BOM) 写入本地启动跳板 VBS，彻底兼容 Windows 中文用户名路径 (wscript.exe 原生支持 UTF-16LE)
@@ -1649,6 +1649,9 @@ WantedBy=default.target
         }
       }
     } catch {}
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const startDt = new Date(Date.now() + 60000);
+    const localStartBoundary = `${startDt.getFullYear()}-${pad2(startDt.getMonth() + 1)}-${pad2(startDt.getDate())}T${pad2(startDt.getHours())}:${pad2(startDt.getMinutes())}:00`;
     const principalId = userSid || userAuthor;
     const sddl = `D:(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;IU)${userSid ? `(A;;FA;;;${userSid})` : ''}S:(ML;;NW;;;ME)`;
     const taskXml = [
@@ -1679,6 +1682,14 @@ WantedBy=default.target
       '      <Enabled>true</Enabled>',
       `      <UserId>${xmlEsc(principalId)}</UserId>`,
       '    </LogonTrigger>',
+      '    <TimeTrigger>',
+      '      <Repetition>',
+      '        <Interval>PT2M</Interval>',
+      '        <StopAtDurationEnd>false</StopAtDurationEnd>',
+      '      </Repetition>',
+      `      <StartBoundary>${localStartBoundary}</StartBoundary>`,
+      '      <Enabled>true</Enabled>',
+      '    </TimeTrigger>',
       '  </Triggers>',
       '  <Actions Context="Author">',
       '    <Exec>',
@@ -1813,7 +1824,7 @@ WantedBy=default.target
     let spawnedPid = null;
     if (!scheduledTaskStarted) {
       try {
-        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', wrapperDaemon], {
+        const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', wrapperDaemon, '--ensure'], {
           detached: true,
           stdio: 'ignore',
           windowsHide: true
@@ -2004,7 +2015,7 @@ async function runInstall() {
     const wrapperDaemon = path.join(scriptsDir, 'antigravity-font-daemon.mjs');
     const realDaemonUrl = pathToFileURL(realDaemon).href;
     const existingWrapper = fs.existsSync(wrapperDaemon) ? fs.readFileSync(wrapperDaemon, 'utf8') : '';
-    if (!existingWrapper.includes(realDaemonUrl) || !existingWrapper.includes('monitor_server.mjs')) {
+    if (!existingWrapper.includes(realDaemonUrl) || !existingWrapper.includes('monitor_server.mjs') || !existingWrapper.includes('--ensure')) {
       fs.writeFileSync(
         wrapperDaemon,
         `#!/usr/bin/env node\n// Auto-generated wrapper -> ${realDaemon}\nif (!process.argv.includes('--once')) {\n  process.on('uncaughtException', (err) => { try { console.error('[Daemon Guard] uncaughtException:', err?.message || err); } catch {} });\n  process.on('unhandledRejection', (reason) => { try { console.error('[Daemon Guard] unhandledRejection:', reason?.message || reason); } catch {} });\n}\nawait import(${JSON.stringify(realDaemonUrl)});\n`,

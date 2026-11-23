@@ -4863,30 +4863,76 @@ function deployTokenMonitorService(home) {
         const wrapperCode = `#!/usr/bin/env node
 // Auto-generated wrapper -> ${deployedDaemon}
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-if (!process.argv.includes('--once')) {
+const isOnce = process.argv.includes('--once');
+const isEnsure = process.argv.includes('--ensure');
+const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
+const heartbeatFile = path.join(os.homedir(), '.gemini', 'antigravity', 'scripts', 'daemon.heartbeat');
+const monitorFile = path.join(os.homedir(), '.gemini', 'antigravity', 'token-monitor', 'monitor_server.mjs');
+
+function checkMonitorHealthy(timeoutMs = 700) {
+  return new Promise((resolve) => {
+    const req = http.get('http://127.0.0.1:18923/api/health', { timeout: timeoutMs }, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => resolve(res.statusCode === 200 && body.includes('"ok":true')));
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+if (isEnsure && !isOnce) {
+  try {
+    if (fs.existsSync(pidFile) && fs.existsSync(heartbeatFile)) {
+      const rawPid = fs.readFileSync(pidFile, 'utf8').trim();
+      const pid = parseInt(rawPid.split(/\\s+/)[0], 10);
+      const st = fs.statSync(heartbeatFile);
+      const ageMs = Date.now() - st.mtimeMs;
+      if (pid > 0 && pid !== process.pid && !/\\bstop\\b/i.test(rawPid) && ageMs >= 0 && ageMs < 45000) {
+        process.kill(pid, 0);
+        const needMonitor = fs.existsSync(monitorFile);
+        if (!needMonitor || (await checkMonitorHealthy())) {
+          process.exit(0);
+        }
+      }
+    }
+  } catch {}
+}
+
+if (!isOnce) {
   process.on('uncaughtException', (err) => {
     try { console.error('[Daemon Guard] uncaughtException:', err?.message || err); } catch {}
   });
   process.on('unhandledRejection', (reason) => {
     try { console.error('[Daemon Guard] unhandledRejection:', reason?.message || reason); } catch {}
   });
+  const writeHeartbeat = () => {
+    try {
+      fs.mkdirSync(path.dirname(heartbeatFile), { recursive: true });
+      fs.writeFileSync(heartbeatFile, String(process.pid), 'utf8');
+    } catch {}
+  };
+  writeHeartbeat();
+  const hbTimer = setInterval(writeHeartbeat, 10000);
+  if (typeof hbTimer.unref === 'function') hbTimer.unref();
 }
 
 await import(${JSON.stringify(realDaemonUrl)});
 
-if (!process.argv.includes('--once')) {
-  const monitorFile = path.join(os.homedir(), '.gemini', 'antigravity', 'token-monitor', 'monitor_server.mjs');
-  if (fs.existsSync(monitorFile)) {
-    try {
-      const { startTokenMonitorServer } = await import(pathToFileURL(monitorFile).href);
-      await startTokenMonitorServer({ host: '127.0.0.1', port: 18923 });
-    } catch (e) {
-      console.warn('[Token Monitor] 随守护启动失败:', e?.message || e);
-    }
+if (!isOnce && fs.existsSync(monitorFile)) {
+  try {
+    const { startTokenMonitorServer } = await import(pathToFileURL(monitorFile).href);
+    await startTokenMonitorServer({ host: '127.0.0.1', port: 18923 });
+  } catch (e) {
+    console.warn('[Token Monitor] 随守护启动失败:', e?.message || e);
   }
 }
 `;
@@ -4927,13 +4973,16 @@ function restartDaemonWithMonitorIfNeeded(home, deployedInfo) {
     } else if (process.platform === 'win32') {
         try {
             const pidFile = path.join(os.tmpdir(), 'ag-theme-daemon-default.pid');
+            const heartbeatFile = path.join(home, '.gemini', 'antigravity', 'scripts', 'daemon.heartbeat');
             if (fs.existsSync(pidFile)) {
                 const oldPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
                 if (oldPid > 0 && oldPid !== process.pid) {
                     try { process.kill(oldPid, 'SIGTERM'); } catch (e) {}
                     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
                 }
+                try { fs.unlinkSync(pidFile); } catch (e) {}
             }
+            try { if (fs.existsSync(heartbeatFile)) fs.unlinkSync(heartbeatFile); } catch (e) {}
             const r = child_process.spawnSync('schtasks', ['/Run', '/TN', 'AntigravityThemeDaemon'], {
                 windowsHide: true,
                 stdio: 'ignore',
