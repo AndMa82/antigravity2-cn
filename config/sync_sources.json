@@ -51,6 +51,15 @@
       "priority": 50,
       "adapter": "token_monitor",
       "syncTokenMonitor": true
+    },
+    {
+      "id": "agy_fast",
+      "repo": "https://github.com/INK-Q/agy-fast.git",
+      "branch": "main",
+      "enabled": true,
+      "priority": 40,
+      "adapter": "agy_fast",
+      "syncAgyFast": true
     }
   ]
 }

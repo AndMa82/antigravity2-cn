@@ -40,6 +40,7 @@
 - **`dicts/`**：汉化字典文件夹，内含按模块分类的 JSON 对照翻译字典。
 - **`scripts/`**：工程与自动化工具集，包含简繁词典对齐校验器 (`compare_dicts.js`)、版本升级全量界面/悬浮词条自动 Diff 扫描器 (`dev_tool.js scan-ui`) 及 MCP 基准清册 (`dev_tool.js dump-mcp`)。
 - **`tools/token_monitor/`**：集成开源项目 [STARKTANG108/antigravity-token-monitor](https://github.com/STARKTANG108/antigravity-token-monitor)，提供零外部依赖 Node.js (`node:sqlite` + `node:http`) 与 Python 双引擎实时 Token 与 API 价值分析后端 (`127.0.0.1:18923`)，支持自适应移动端/侧栏窄屏布局。
+- **`plugins/agy-fast/` & `plugins/agy-fast-preset/`**：可选集成开源加速插件 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast)（5 个本地急加载 MCP 批量工具 + `<50ms` `SessionStart` 工作区快照 + 离线轨迹对比 `benchmark.mjs`），并附带与 `rtk`、CDP 汉化、Token 监控及多 Agent 并存的预设覆写规则 `AGENTS.local.md`。
 
 ---
 
@@ -108,6 +109,13 @@ node localization_engine.js --asar --brand-title english
 # 如需跳过或移除 Windows 免 TUN 透明代理模块
 node localization_engine.js --cdp-only --no-proxy
 node localization_engine.js --cdp-only --remove-proxy
+
+# 可选：单独安装/自检/测速/卸载 agy-fast 本地 MCP 加速套件（默认不随汉化静默安装）
+node localization_engine.js --fast-install
+node localization_engine.js --cdp-only --brand-title english --with-fast
+node localization_engine.js --fast-doctor
+node localization_engine.js --fast-bench
+node localization_engine.js --fast-uninstall
 ```
 
 ---
@@ -135,8 +143,8 @@ node localization_engine.js --cdp-only --remove-proxy
 
 本仓库作为个人维护的增强分支，保持与官方上游汉化及船板主题的双向可维护性：
 
-### 1. 同步上游汉化、船板主题与 Token 监控更新
-通过内置多源同步引擎一键拉取 `qqxpee` / `yiheng8023` / `liominsb` / `yuexps` / `chuanban` / `token_monitor` 六源增量词条、`theme_patch/core/` 内核与 `tools/token_monitor/` 面板：
+### 1. 同步上游汉化、船板主题、Token 监控与 agy-fast 更新
+通过内置多源同步引擎一键拉取 `qqxpee` / `yiheng8023` / `liominsb` / `yuexps` / `chuanban` / `token_monitor` / `agy_fast` 七源增量词条、`theme_patch/core/` 内核、`tools/token_monitor/` 面板与 `plugins/agy-fast/` 运行期产物：
 ```bash
 node localization_engine.js --sync --no-relocalize
 ```

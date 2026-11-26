@@ -17,6 +17,7 @@
     - **零篡改原版客户端**：Windows 与 macOS 均不修改 `app.asar` 与官方代码签名，客户端自动更新全程无缝存活且 2.5 秒免重启热生效；同时双端均支持自动免 TUN 代理：Windows 端预集成透明代理模块（`proxy_config/version.dll` + `proxy_config/config.json`，默认 SOCKS5 `127.0.0.1:7890` 并支持自动探测本机活跃代理端口），部署 `--cdp-only`、`--theme-install` 或 `--asar` 时自动注入主程序目录并由后台守护巡检补齐；macOS 端自动读取 `scutil --proxy` 或探测本机活跃代理端口（`7890, 7897, 18080, 10808, 10809, 6152`），通过 `launchctl setenv` 与 `~/Library/LaunchAgents/com.antigravity.proxy-env.plist` 持久化注入 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`（附加 `--no-proxy` 可跳过，`--remove-proxy` 或 `--huifu` 可双端清理）。
     - 已接入 [`scripts/sync_repos.js`](scripts/sync_repos.js)（`config/sync_sources.json` 中的 `chuanban` 与 `token_monitor` 源），执行 `--sync` 时自动同步更新 `theme_patch/core` 内核、`tools/token_monitor/` 面板、归并新增词条并热刷新 `user/i18n.override.json`。
     - 若需传统 ASAR 全量文件级汉化（覆盖系统原生菜单栏、`Antigravity IDE` 与外部扩展），仍可通过 `--asar` 参数手动触发（`installThemePatchIfNeeded` 会在传统 ASAR 模式下自动切换为 `"i18n": false` 避免双观察器冲突）。
+  - 可选集成 **本地 MCP 加速套件 (`plugins/agy-fast/`)**：基于 [INK-Q/agy-fast](https://github.com/INK-Q/agy-fast) 的零依赖运行期只读产物（5 个急加载 MCP 工具 + `<50ms` `SessionStart` 快照 + 离线 `benchmark.mjs`），搭配仓库内置的 [`plugins/agy-fast-preset/AGENTS.local.md`](plugins/agy-fast-preset/AGENTS.local.md) 并存覆写层（协调 `rtk`、CDP 汉化与多 Agent 路由）。默认不随汉化静默安装，可通过 `--fast-install` 单独部署或在 `--cdp-only` / `--asar` 时附加 `--with-fast` 启用，且默认关闭上游独立后台更新改由 `--sync` 统一托管。
 
 ---
 
@@ -27,12 +28,13 @@
 当上游汉化源（`qqxpee` / `yiheng8023` / `liominsb` / `yuexps`）或船板主题补丁（`Anarcadia/chuanban-antigravity-theme-patch`）发布更新时，优先通过多源同步引擎一键跟进：
 
 ```powershell
-# 一键拉取六源增量词条 + 自动更新 theme_patch/core 内核、Token Monitor 与 CDP 补充词库
+# 一键拉取七源增量词条 + 自动更新 theme_patch/core 内核、Token Monitor、agy-fast 运行期产物与 CDP 补充词库
 node localization_engine.js --sync --no-relocalize
 
-# 仅单独同步船板主题内核或 Token 监控面板
+# 仅单独同步船板主题内核、Token 监控面板或 agy-fast 加速插件
 node scripts/sync_repos.js --only chuanban --no-relocalize
 node scripts/sync_repos.js --only token_monitor --no-relocalize
+node scripts/sync_repos.js --only agy_fast --no-relocalize
 ```
 
 如需合并上游 `qqxpee/antigravity2-cn` 的引擎架构提交，仍可按需 `git fetch upstream` 审阅合并。
@@ -53,6 +55,15 @@ node scripts/sync_repos.js --only token_monitor --no-relocalize
   node localization_engine.js --theme-uninstall # 单独停用并卸载船板主题守护服务
   ```
   *(注：个性化调整配色预设、字号或 CSS 请编辑部署后的 `~/.gemini/antigravity/theme-patch/user/` 目录，2.5 秒自动热生效)*。
+* **可选管理 `agy-fast` 本地 MCP 加速插件**（默认不随汉化静默安装）：
+  ```powershell
+  node localization_engine.js --fast-install                   # 单独部署 agy-fast + 并存预设 AGENTS.local.md
+  node localization_engine.js --cdp-only --with-fast           # 纯 CDP 汉化同时一并部署 agy-fast
+  node localization_engine.js --fast-doctor                    # 检验 Node 版本、rg、MCP 握手与 SessionStart 快照
+  node localization_engine.js --fast-bench                     # 离线解析最近 10 个本地会话轨迹（或接 compare 等参数）
+  node localization_engine.js --fast-config --tool-loading lazy # 透传调整 agy-fast 配置（如工具加载模式）
+  node localization_engine.js --fast-uninstall                 # 单独卸载 agy-fast 插件
+  ```
 * **完整还原所有本地补丁与守护服务**：
   ```powershell
   node localization_engine.js --huifu --no-kill
@@ -68,5 +79,5 @@ node scripts/sync_repos.js --only token_monitor --no-relocalize
 ## 🔒 约束与规范
 
 1. 严禁将修改推送到 `upstream`；所有提交必须推送到 `origin/main`。
-2. 严禁修改 `theme_patch/core/` 只读内核文件（破坏 SHA-256 完整性校验），一切本地个性化调优均在 `theme_patch/user/` 完成。
+2. 严禁修改 `theme_patch/core/` 与 `plugins/agy-fast/` 只读内核目录（避免破坏完整性校验或被 `--sync` 覆盖）；船板主题调优在 `theme_patch/user/` 完成，`agy-fast` 并存预设调优统一在 [`plugins/agy-fast-preset/AGENTS.local.md`](plugins/agy-fast-preset/AGENTS.local.md) 完成。
 3. 任何对 `localization_engine.js` 的修改，需保持与上游汉化结构及 `--cdp-only` / `--asar` 双模式的兼容性。

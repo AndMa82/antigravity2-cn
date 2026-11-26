@@ -5179,6 +5179,252 @@ function uninstallThemePatchIfNeeded() {
     }
 }
 
+const AGY_FAST_PRESET_START = '<!-- AG2CN_AGY_FAST_PRESET_START -->';
+const AGY_FAST_PRESET_END = '<!-- AG2CN_AGY_FAST_PRESET_END -->';
+
+function getAgyFastPaths(customTargetDir = '', projectDir = '') {
+    const { home } = resolveThemeUserHome();
+    const repoPluginDir = path.join(__dirname, 'plugins', 'agy-fast');
+    const presetRulePath = path.join(__dirname, 'plugins', 'agy-fast-preset', 'AGENTS.local.md');
+    let deployedDir = path.join(home, '.gemini', 'config', 'plugins', 'agy-fast');
+    if (customTargetDir) {
+        deployedDir = path.resolve(customTargetDir);
+    } else if (projectDir) {
+        deployedDir = path.join(path.resolve(projectDir), '.agents', 'plugins', 'agy-fast');
+    }
+    const customCache = process.env.AGY_FAST_CACHE_DIR ? process.env.AGY_FAST_CACHE_DIR.trim() : '';
+    const cacheDir = customCache
+        ? path.resolve(customCache)
+        : path.join(home, '.gemini', 'cache', 'agy-fast');
+    return {
+        home,
+        repoPluginDir,
+        presetRulePath,
+        deployedDir,
+        cacheDir,
+        cacheConfigPath: path.join(cacheDir, 'config.json')
+    };
+}
+
+function runAgyFastScript(scriptRelPath, subargs = [], extraEnv = {}) {
+    const { repoPluginDir } = getAgyFastPaths();
+    const scriptPath = path.join(repoPluginDir, scriptRelPath);
+    if (!fs.existsSync(scriptPath)) {
+        return { skipped: true, status: 1 };
+    }
+    const res = child_process.spawnSync(process.execPath, [scriptPath, ...subargs], {
+        cwd: repoPluginDir,
+        stdio: 'inherit',
+        env: { ...process.env, ...extraEnv }
+    });
+    return {
+        skipped: false,
+        status: typeof res.status === 'number' ? res.status : (res.error ? 1 : 0),
+        error: res.error
+    };
+}
+
+function syncAgyFastPresetLocalRule(deployedDir, options = {}) {
+    if (options.skipPreset) {
+        return { action: 'skipped', reason: 'flag' };
+    }
+    const { presetRulePath } = getAgyFastPaths();
+    if (!fs.existsSync(presetRulePath)) {
+        return { action: 'skipped', reason: 'missing_preset' };
+    }
+
+    const presetRaw = fs.readFileSync(presetRulePath, 'utf8').replace(/\r\n/g, '\n');
+    const pStart = presetRaw.indexOf(AGY_FAST_PRESET_START);
+    const pEnd = presetRaw.indexOf(AGY_FAST_PRESET_END);
+    if (pStart === -1 || pEnd === -1 || pEnd <= pStart) {
+        return { action: 'skipped', reason: 'invalid_preset' };
+    }
+    const managedBlock = presetRaw.slice(pStart, pEnd + AGY_FAST_PRESET_END.length);
+    const targetRulePath = path.join(deployedDir, 'rules', 'AGENTS.local.md');
+
+    if (!fs.existsSync(targetRulePath)) {
+        fs.mkdirSync(path.dirname(targetRulePath), { recursive: true });
+        const normalized = presetRaw.endsWith('\n') ? presetRaw : `${presetRaw}\n`;
+        fs.writeFileSync(targetRulePath, normalized, 'utf8');
+        return { action: 'created', path: targetRulePath };
+    }
+
+    const existingRaw = fs.readFileSync(targetRulePath, 'utf8').replace(/\r\n/g, '\n');
+    const eStart = existingRaw.indexOf(AGY_FAST_PRESET_START);
+    const eEnd = existingRaw.indexOf(AGY_FAST_PRESET_END);
+    if (eStart === -1 || eEnd === -1 || eEnd <= eStart) {
+        console.log(`[agy-fast] 检测到用户自定义 rules/AGENTS.local.md（无托管标记），已完整保留未覆盖。`);
+        return { action: 'preserved_user', path: targetRulePath };
+    }
+
+    let updated =
+        existingRaw.slice(0, eStart) +
+        managedBlock +
+        existingRaw.slice(eEnd + AGY_FAST_PRESET_END.length);
+
+    if (!/^---\n[\s\S]*?\ntrigger:\s*always_on\b[\s\S]*?\n---(?:\n|$)/.test(updated)) {
+        updated = `---\ntrigger: always_on\n---\n\n${updated.replace(/^\n+/, '')}`;
+    }
+    if (!updated.endsWith('\n')) {
+        updated += '\n';
+    }
+    fs.writeFileSync(targetRulePath, updated, 'utf8');
+    return { action: 'updated', path: targetRulePath };
+}
+
+function parseAgyFastCliOptions(rawArgs, opts = {}) {
+    const allowBareTargetAsDir = Boolean(opts.allowBareTargetAsDir);
+    let targetDir = '';
+    let projectDir = '';
+    let autoUpdate = '';
+    let toolLoading = '';
+    let editsFormat = '';
+    const skipPreset = rawArgs.includes('--no-fast-preset');
+    const noEnable = rawArgs.includes('--no-enable');
+    const noAcp = rawArgs.includes('--no-acp');
+    const quiet = rawArgs.includes('--quiet') || rawArgs.includes('-q');
+
+    for (let i = 0; i < rawArgs.length; i++) {
+        const a = rawArgs[i];
+        if (a === '--fast-target' && i + 1 < rawArgs.length) {
+            targetDir = rawArgs[++i];
+        } else if (a.startsWith('--fast-target=')) {
+            targetDir = a.slice('--fast-target='.length);
+        } else if (allowBareTargetAsDir && a === '--target' && i + 1 < rawArgs.length) {
+            targetDir = rawArgs[++i];
+        } else if (allowBareTargetAsDir && a.startsWith('--target=')) {
+            targetDir = a.slice('--target='.length);
+        } else if (a === '--project') {
+            const next = rawArgs[i + 1];
+            if (next && !next.startsWith('-')) {
+                projectDir = next;
+                i++;
+            } else {
+                projectDir = process.cwd();
+            }
+        } else if (a.startsWith('--project=')) {
+            projectDir = a.slice('--project='.length) || process.cwd();
+        } else if (a === '--fast-auto-update' && i + 1 < rawArgs.length) {
+            autoUpdate = rawArgs[++i].toLowerCase();
+        } else if (a.startsWith('--fast-auto-update=')) {
+            autoUpdate = a.slice('--fast-auto-update='.length).toLowerCase();
+        } else if (a === '--tool-loading' && i + 1 < rawArgs.length) {
+            toolLoading = rawArgs[++i].toLowerCase();
+        } else if (a.startsWith('--tool-loading=')) {
+            toolLoading = a.slice('--tool-loading='.length).toLowerCase();
+        } else if (a === '--edits-format' && i + 1 < rawArgs.length) {
+            editsFormat = rawArgs[++i].toLowerCase();
+        } else if (a.startsWith('--edits-format=')) {
+            editsFormat = a.slice('--edits-format='.length).toLowerCase();
+        }
+    }
+
+    const passThroughArgs = [];
+    if (targetDir) passThroughArgs.push('--target', targetDir);
+    if (projectDir) passThroughArgs.push('--project', projectDir);
+    if (toolLoading) passThroughArgs.push('--tool-loading', toolLoading);
+    if (editsFormat) passThroughArgs.push('--edits-format', editsFormat);
+    if (noEnable) passThroughArgs.push('--no-enable');
+    if (noAcp) passThroughArgs.push('--no-acp');
+    if (quiet) passThroughArgs.push('--quiet');
+
+    const uninstallArgs = [];
+    if (targetDir) uninstallArgs.push('--target', targetDir);
+    if (projectDir) uninstallArgs.push('--project', projectDir);
+    if (noEnable) uninstallArgs.push('--no-enable');
+    if (noAcp) uninstallArgs.push('--no-acp');
+    if (quiet) uninstallArgs.push('--quiet');
+
+    return {
+        targetDir,
+        projectDir,
+        autoUpdate,
+        toolLoading,
+        editsFormat,
+        skipPreset,
+        noEnable,
+        noAcp,
+        quiet,
+        passThroughArgs,
+        uninstallArgs
+    };
+}
+
+function installAgyFastIfNeeded(options = {}) {
+    const nodeMajor = Number(process.versions.node.split('.')[0]);
+    if (!Number.isFinite(nodeMajor) || nodeMajor < 20) {
+        console.error(`[agy-fast 错误] agy-fast 需要 Node.js >= 20.0.0（当前 ${process.version}）。`);
+        return { ok: false, reason: 'node_version' };
+    }
+
+    const paths = getAgyFastPaths(options.targetDir, options.projectDir);
+    if (!fs.existsSync(path.join(paths.repoPluginDir, 'scripts', 'install.mjs'))) {
+        console.warn(`[agy-fast 警告] 未找到 plugins/agy-fast/scripts/install.mjs，请先运行 --sync 同步。`);
+        return { ok: false, skipped: true, reason: 'missing_installer' };
+    }
+
+    let autoUpdateToApply = '';
+    if (options.autoUpdate && ['auto', 'notify', 'off'].includes(options.autoUpdate)) {
+        autoUpdateToApply = options.autoUpdate;
+    } else {
+        let existingAutoUpdate = '';
+        try {
+            if (fs.existsSync(paths.cacheConfigPath)) {
+                const cfg = JSON.parse(fs.readFileSync(paths.cacheConfigPath, 'utf8'));
+                if (cfg && typeof cfg.autoUpdate === 'string') {
+                    existingAutoUpdate = cfg.autoUpdate;
+                }
+            }
+        } catch (_) {}
+        if (!existingAutoUpdate) {
+            autoUpdateToApply = 'off';
+        }
+    }
+
+    console.log(`\n[agy-fast] 正在部署本地 MCP 加速插件至 ${paths.deployedDir} ...`);
+    const installArgs = ['install', ...(options.passThroughArgs || [])];
+    if (autoUpdateToApply) {
+        installArgs.push('--auto-update', autoUpdateToApply);
+    }
+
+    const res = runAgyFastScript('scripts/install.mjs', installArgs);
+    if (res.skipped || res.status !== 0) {
+        console.error(`[agy-fast 错误] 插件部署失败 (exit=${res.status})。`);
+        return { ok: false, status: res.status };
+    }
+
+    const presetRes = syncAgyFastPresetLocalRule(paths.deployedDir, { skipPreset: options.skipPreset });
+    if (presetRes.action === 'created') {
+        console.log(`[agy-fast] 已写入并存预设规则: ${presetRes.path}`);
+    } else if (presetRes.action === 'updated') {
+        console.log(`[agy-fast] 已更新并存预设托管块（完整保留自定义规则）: ${presetRes.path}`);
+    }
+
+    console.log(`[agy-fast] 部署完成！开启新会话即可激活 5 个 MCP 工具与 SessionStart 工作区快照。`);
+    console.log(`[agy-fast] 可随时运行 \`node localization_engine.js --fast-doctor\` 自检，或 \`--fast-bench\` 对比加速前后效果。`);
+    return { ok: true, deployedDir: paths.deployedDir, presetAction: presetRes.action };
+}
+
+function uninstallAgyFastIfNeeded(options = {}) {
+    const paths = getAgyFastPaths(options.targetDir, options.projectDir);
+    if (!fs.existsSync(paths.deployedDir)) {
+        if (options.verboseMissing) {
+            console.log(`[agy-fast] 未检测到已安装的插件目录 (${paths.deployedDir})，无需卸载。`);
+        }
+        return { ok: true, skipped: true };
+    }
+    if (!fs.existsSync(path.join(paths.repoPluginDir, 'scripts', 'install.mjs'))) {
+        return { ok: false, skipped: true, reason: 'missing_installer' };
+    }
+    console.log(`\n[agy-fast] 正在卸载本地 MCP 加速插件 (${paths.deployedDir})...`);
+    const res = runAgyFastScript('scripts/install.mjs', ['uninstall', ...(options.uninstallArgs || [])]);
+    if (res.skipped || res.status !== 0) {
+        console.warn(`[agy-fast 警告] 卸载过程退出异常: exit=${res.status}`);
+        return { ok: false, status: res.status };
+    }
+    return { ok: true };
+}
+
 // ==========================================
 // 入口
 // ==========================================
@@ -5278,6 +5524,59 @@ function main() {
         }
     }
 
+    if (args.includes('--fast-install')) {
+        const fastOpts = parseAgyFastCliOptions(args, { allowBareTargetAsDir: true });
+        const r = installAgyFastIfNeeded(fastOpts);
+        if (!r || !r.ok) process.exit(1);
+        return;
+    }
+    if (args.includes('--fast-uninstall')) {
+        const fastOpts = parseAgyFastCliOptions(args, { allowBareTargetAsDir: true });
+        const r = uninstallAgyFastIfNeeded({ ...fastOpts, verboseMissing: true });
+        if (!r || !r.ok) process.exit(1);
+        return;
+    }
+    if (args.includes('--fast-doctor') || args.includes('--fast-status')) {
+        const fastOpts = parseAgyFastCliOptions(args, { allowBareTargetAsDir: true });
+        const res = runAgyFastScript('scripts/install.mjs', ['doctor', ...fastOpts.uninstallArgs]);
+        if (res.skipped || res.status !== 0) process.exit(res.status || 1);
+        return;
+    }
+    if (args.includes('--fast-config')) {
+        const extra = [];
+        for (let i = 0; i < args.length; i++) {
+            const a = args[i];
+            if (a === '--fast-config') continue;
+            if (a === '--fast-target') {
+                extra.push('--target');
+                continue;
+            }
+            if (a.startsWith('--fast-target=')) {
+                extra.push(`--target=${a.slice('--fast-target='.length)}`);
+                continue;
+            }
+            if (a === '--fast-auto-update') {
+                extra.push('--auto-update');
+                continue;
+            }
+            if (a.startsWith('--fast-auto-update=')) {
+                extra.push(`--auto-update=${a.slice('--fast-auto-update='.length)}`);
+                continue;
+            }
+            extra.push(a);
+        }
+        const res = runAgyFastScript('scripts/install.mjs', ['config', ...extra]);
+        if (res.skipped || res.status !== 0) process.exit(res.status || 1);
+        return;
+    }
+    if (args.includes('--fast-bench')) {
+        const extra = args.filter(a => a !== '--fast-bench');
+        const benchArgs = extra.length > 0 ? extra : ['analyze', '--local', '--recent', '10'];
+        const res = runAgyFastScript('dist/benchmark.mjs', benchArgs);
+        if (res.skipped || res.status !== 0) process.exit(res.status || 1);
+        return;
+    }
+
     if (args.includes('--cdp-only') && !args.includes('--asar') && !huifu) {
         console.log("====== 正在切换并部署 Antigravity 纯 CDP 零修改汉化模式 (方案 A) ======");
         try {
@@ -5372,6 +5671,14 @@ function main() {
             for (const extDir of extTargets) {
                 console.log(`\n[扩展目标] 正在同步汉化外部编辑器扩展: ${path.basename(extDir)} (${extDir})`);
                 installExtensionTarget(extDir);
+            }
+        }
+        if (args.includes('--with-fast') && process.env.AG_SKIP_REAL_INSTALL !== '1') {
+            try {
+                const fastOpts = parseAgyFastCliOptions(args, { allowBareTargetAsDir: false });
+                installAgyFastIfNeeded(fastOpts);
+            } catch (e) {
+                console.warn(`[agy-fast 警告] 加速插件部署异常: ${e.message}`);
             }
         }
         return;
@@ -5544,6 +5851,11 @@ function main() {
                 uninstallThemePatchIfNeeded();
             } catch (e) {}
         }
+        if (!args.includes('--keep-fast') && process.env.AG_SKIP_REAL_INSTALL !== '1') {
+            try {
+                uninstallAgyFastIfNeeded();
+            } catch (e) {}
+        }
     } else if (!huifu) {
         const defaultEnableAutoHeal =
             overallSuccess &&
@@ -5581,6 +5893,14 @@ function main() {
                 });
             } catch (e) {
                 console.warn(`[主题警告] 船板主题服务执行异常: ${e.message}`);
+            }
+        }
+        if (overallSuccess && args.includes('--with-fast') && process.env.AG_SKIP_REAL_INSTALL !== '1') {
+            try {
+                const fastOpts = parseAgyFastCliOptions(args, { allowBareTargetAsDir: false });
+                installAgyFastIfNeeded(fastOpts);
+            } catch (e) {
+                console.warn(`[agy-fast 警告] 加速插件部署异常: ${e.message}`);
             }
         }
     }

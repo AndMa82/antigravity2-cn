@@ -24,6 +24,21 @@ const DICTS_SC_DIR = path.join(ROOT_DIR, "dicts");
 const DICTS_TW_DIR = path.join(ROOT_DIR, "dicts_tw");
 const SYNC_CACHE_DIR = path.join(ROOT_DIR, ".sync_cache");
 const THEME_PATCH_DIR = path.join(ROOT_DIR, "theme_patch");
+const AGY_FAST_PLUGIN_DIR = path.join(ROOT_DIR, "plugins", "agy-fast");
+const AGY_FAST_SYNC_FILES = [
+    "plugin.json",
+    "mcp_config.json",
+    "hooks.json",
+    "rules/AGENTS.md",
+    "assets/logo.svg",
+    "dist/mcp-server.mjs",
+    "dist/session-start.mjs",
+    "dist/benchmark.mjs",
+    "dist/updater.mjs",
+    "scripts/install.mjs",
+    "LICENSE",
+    "README.zh-CN.md"
+];
 
 const METADATA_JSON_NAMES = new Set([
     "package.json",
@@ -690,9 +705,39 @@ function syncTokenMonitorFiles(repoDir, targetDir = path.join(ROOT_DIR, "tools",
     return { updated: changedFiles.length > 0, changedFiles };
 }
 
+function syncAgyFastFiles(repoDir, targetDir = AGY_FAST_PLUGIN_DIR) {
+    if (!fs.existsSync(repoDir)) return { updated: false, changedFiles: [], version: null };
+    fs.mkdirSync(targetDir, { recursive: true });
+    const changedFiles = [];
+
+    for (const relPath of AGY_FAST_SYNC_FILES) {
+        const s = path.join(repoDir, relPath);
+        const d = path.join(targetDir, relPath);
+        if (!fs.existsSync(s) || !fs.statSync(s).isFile()) continue;
+        fs.mkdirSync(path.dirname(d), { recursive: true });
+        const sBuf = fs.readFileSync(s);
+        const dBuf = fs.existsSync(d) ? fs.readFileSync(d) : null;
+        if (!dBuf || !sBuf.equals(dBuf)) {
+            fs.writeFileSync(d, sBuf);
+            changedFiles.push(relPath);
+        }
+    }
+
+    let version = null;
+    try {
+        const manifestPath = path.join(targetDir, "plugin.json");
+        if (fs.existsSync(manifestPath)) {
+            version = JSON.parse(fs.readFileSync(manifestPath, "utf8")).version || null;
+        }
+    } catch (_) {}
+
+    return { updated: changedFiles.length > 0, changedFiles, version };
+}
+
 function extractCandidatesByAdapter(src, repoDir, cacheDir) {
     const adapter = String(src.adapter || src.id || "").toLowerCase();
     if (adapter === "token_monitor") return [];
+    if (adapter === "agy_fast") return [];
     if (adapter === "qqxpee") return adapterQqxpee(repoDir, cacheDir);
     if (adapter === "chuanban") return adapterChuanban(repoDir);
     if (adapter === "yiheng" || adapter === "yiheng8023") return adapterYiheng(repoDir);
@@ -862,6 +907,7 @@ async function runSync(rawArgv = process.argv.slice(2)) {
     let updatedCount = 0;
     let themeCoreUpdated = false;
     let tokenMonitorUpdated = false;
+    let agyFastUpdated = false;
     let processedAnySource = false;
 
     for (const src of enabledSources) {
@@ -901,6 +947,17 @@ async function runSync(rawArgv = process.argv.slice(2)) {
                 console.log(`[同步] 已同步更新 Token Monitor: ${tmSync.changedFiles.join(", ")}`);
             } else {
                 console.log(`[同步] Token Monitor 已是最新。`);
+            }
+        }
+        if (src.syncAgyFast && !opts.dryRun) {
+            const afSync = syncAgyFastFiles(fetchInfo.repoDir, AGY_FAST_PLUGIN_DIR);
+            if (afSync.updated) {
+                agyFastUpdated = true;
+                console.log(
+                    `[同步] 已同步更新 agy-fast 插件内核 (${afSync.version || "latest"}): ${afSync.changedFiles.join(", ")}`
+                );
+            } else {
+                console.log(`[同步] agy-fast 插件内核已是最新 (${afSync.version || "latest"})。`);
             }
         }
         const rawCandidates = extractCandidatesByAdapter(src, fetchInfo.repoDir, cacheDir);
@@ -1079,6 +1136,27 @@ async function runSync(rawArgv = process.argv.slice(2)) {
         }
     }
 
+    if (
+        agyFastUpdated &&
+        config.autoRelocalizeAfterSync &&
+        !opts.noRelocalize &&
+        process.env.AG_SKIP_REAL_INSTALL !== "1"
+    ) {
+        try {
+            const deployedFastManifest = path.join(os.homedir(), ".gemini", "config", "plugins", "agy-fast", "plugin.json");
+            const enginePath = path.join(ROOT_DIR, "localization_engine.js");
+            if (fs.existsSync(deployedFastManifest) && fs.existsSync(enginePath)) {
+                console.log("[同步] 检测到本机已部署 agy-fast 插件，正在联动热升级...");
+                child_process.spawnSync(process.execPath, [enginePath, "--fast-install"], {
+                    cwd: ROOT_DIR,
+                    stdio: "inherit"
+                });
+            }
+        } catch (err) {
+            console.warn(`[同步警告] agy-fast 插件热升级异常: ${err.message}`);
+        }
+    }
+
     return { added: addedCount, updated: updatedCount, quarantined: quarantined.length, conflicts: conflicts.length };
 }
 
@@ -1093,5 +1171,6 @@ module.exports = {
     runSync,
     auditEntryRuleG,
     resolveGitProxy,
-    extractCandidatesByAdapter
+    extractCandidatesByAdapter,
+    syncAgyFastFiles
 };
